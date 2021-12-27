@@ -48,7 +48,7 @@ impl Confidence {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
@@ -128,6 +128,7 @@ impl Value {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct Datapoint {
     pub x: Value,
 
@@ -226,7 +227,7 @@ impl Datapoint {
     }
 }
 
-#[derive(serde::Deserialize, Clone)]
+#[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Experiment {
     pub label: String,
     pub x_label: String,
@@ -235,6 +236,7 @@ pub struct Experiment {
     pub y_units: String,
 }
 
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ExperimentStatus {
     pub label: String,
     pub n_datapoints: usize,

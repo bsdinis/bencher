@@ -1,6 +1,7 @@
 use cli_table::{format::Justify, Cell, Style, Table, TableStruct};
 use either::Either;
 use eyre::Result;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -24,101 +25,27 @@ pub struct ExperimentHandle<'a> {
 }
 
 impl<'a> Config {
-    fn find_config_dir() -> Result<PathBuf> {
-        let mut dir: PathBuf = Path::new(".").canonicalize()?;
-        while !dir.parent().is_none() {
-            let file = dir.join(BENCHER_CONFIG_FILENAME);
-            if file.exists() {
-                return Ok(dir);
-            }
-
-            dir.pop();
-        }
-
-        Err(BencherError::NotFound.into())
-    }
-
-    fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
-        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-            | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-            | rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
-
-        match rusqlite::Connection::open_with_flags(db_path, flags) {
-            Ok(conn) => Ok(conn),
-            Err(e) => Err(BencherError::Database(e).into()),
-        }
-    }
-
-    fn setup_db(db: &rusqlite::Connection) -> Result<()> {
-        db.execute(
-            "create table results (
-                experiment_label varchar,
-
-                x_int int,
-                x_int_1 int,
-                x_int_5 int,
-                x_int_10 int,
-                x_int_25 int,
-                x_int_99 int,
-                x_int_95 int,
-                x_int_90 int,
-                x_int_75 int,
-
-                y_int int,
-                y_int_1 int,
-                y_int_5 int,
-                y_int_10 int,
-                y_int_25 int,
-                y_int_99 int,
-                y_int_95 int,
-                y_int_90 int,
-                y_int_75 int,
-
-                x_float float,
-                x_float_1 float,
-                x_float_5 float,
-                x_float_10 float,
-                x_float_25 float,
-                x_float_99 float,
-                x_float_95 float,
-                x_float_90 float,
-                x_float_75 float,
-
-                y_float float,
-                y_float_1 float,
-                y_float_5 float,
-                y_float_10 float,
-                y_float_25 float,
-                y_float_99 float,
-                y_float_95 float,
-                y_float_90 float,
-                y_float_75 float,
-
-                primary key (experiment_label, x_int, x_float, y_int, y_float)
-            )",
-            [],
-        )?;
-        Ok(())
-    }
-
     pub fn new() -> Result<Self> {
-        let config_dir = Self::find_config_dir()?;
-        let config_file_path = config_dir.join(BENCHER_CONFIG_FILENAME);
+        let config_dir = find_config_dir()?;
 
+        let config_file_path = config_dir.join(BENCHER_CONFIG_FILENAME);
         let config_file = File::open(config_file_path)?;
         let reader = BufReader::new(config_file);
-
         let inner_config: BencherConfig = serde_json::from_reader(reader)?;
 
         let db_path = config_dir.join(&inner_config.database_filepath);
-        let is_created = db_path.exists();
+        let db = open_db(&db_path)?;
 
-        let db = Self::open_db(&db_path)?;
+        setup_db(&db)?;
 
-        if !is_created {
-            Self::setup_db(&db)?;
-        }
+        Ok(Self { db, inner_config })
+    }
 
+    pub fn from_conn_and_config(
+        db: rusqlite::Connection,
+        inner_config: BencherConfig,
+    ) -> Result<Self> {
+        setup_db(&db)?;
         Ok(Self { db, inner_config })
     }
 
@@ -127,20 +54,33 @@ impl<'a> Config {
     }
 
     pub fn status(&self) -> Result<Vec<ExperimentStatus>> {
+        let mut map = HashMap::with_capacity(self.inner_config.experiments.len());
+        for exp in &self.inner_config.experiments {
+            map.insert(
+                exp.label.clone(),
+                ExperimentStatus {
+                    label: exp.label.clone(),
+                    n_datapoints: 0,
+                },
+            );
+        }
+
         let mut stmt = self
             .db
             .prepare("select experiment_label, count(*) from results group by experiment_label")?;
-        let mut vec = vec![];
         for status in stmt.query_map([], |row| {
             Ok(ExperimentStatus {
                 label: row.get(0).unwrap_or("".to_string()),
                 n_datapoints: row.get(1).unwrap_or(0),
             })
         })? {
-            vec.push(status.unwrap())
+            let status = status.unwrap();
+            let n_datapoints = status.n_datapoints;
+            let entry = map.entry(status.label.clone()).or_insert(status);
+            entry.n_datapoints = n_datapoints;
         }
 
-        Ok(vec)
+        Ok(map.into_iter().map(|(_, v)| v).collect())
     }
 
     pub fn get_experiment_handle(&'a self, label: &str) -> Option<ExperimentHandle<'a>> {
@@ -174,55 +114,33 @@ impl<'a> ExperimentHandle<'a> {
         }
 
         let mut stmt = self.db.prepare(
-            "select (
-                                x_int,
-                                x_float,
+            "select x_int, x_float,
+                    y_int, y_float,
+                    x_int_1,    x_int_99,
+                    x_float_1,  x_float_99,
 
-                                y_int,
-                                y_float,
+                    x_int_5,    x_int_95,
+                    x_float_5,  x_float_95,
 
-                                x_int_1,
-                                x_int_99,
-                                x_float_1,
-                                x_float_99,
+                    x_int_10,   x_int_90,
+                    x_float_10, x_float_90,
 
-                                x_int_5,
-                                x_int_95,
-                                x_float_5,
-                                x_float_95,
+                    x_int_25,   x_int_75,
+                    x_float_25, x_float_75,
 
-                                x_int_10,
-                                x_int_90,
-                                x_float_10,
-                                x_float_90,
+                    y_int_1,    y_int_99,
+                    y_float_1,  y_float_99,
 
-                                x_int_25,
-                                x_int_75,
-                                x_float_25,
-                                x_float_75,
+                    y_int_5,    y_int_95,
+                    y_float_5,  y_float_95,
 
-                                y_int_1,
-                                y_int_99,
-                                y_float_1,
-                                y_float_99,
+                    y_int_10,   y_int_90,
+                    y_float_10, y_float_90,
 
-                                y_int_5,
-                                y_int_95,
-                                y_float_5,
-                                y_float_95,
-
-                                y_int_10,
-                                y_int_90,
-                                y_float_10,
-                                y_float_90,
-
-                                y_int_25,
-                                y_int_75,
-                                y_float_25,
-                                y_float_75,
-                             )
-                      from results
-                      where experiment_label = :label",
+                    y_int_25,   y_int_75,
+                    y_float_25, y_float_75
+             from results
+             where experiment_label = :label",
         )?;
 
         let mut vec = vec![];
@@ -480,6 +398,7 @@ impl<'a> ExperimentHandle<'a> {
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
         let mut stmt = self.db.prepare(
             "insert into results (
+                    experiment_label,
                     x_int,
                     x_int_1,
                     x_int_5,
@@ -498,7 +417,7 @@ impl<'a> ExperimentHandle<'a> {
                     y_int_99,
                     y_int_95,
                     y_int_90,
-                    y_int_75
+                    y_int_75,
 
                     x_float,
                     x_float_1,
@@ -520,6 +439,7 @@ impl<'a> ExperimentHandle<'a> {
                     y_float_90,
                     y_float_75
                 ) values (
+                    :experiment_label,
                     :x_int,
                     :x_int_1,
                     :x_int_5,
@@ -538,7 +458,7 @@ impl<'a> ExperimentHandle<'a> {
                     :y_int_99,
                     :y_int_95,
                     :y_int_90,
-                    :y_int_75
+                    :y_int_75,
 
                     :x_float,
                     :x_float_1,
@@ -563,6 +483,7 @@ impl<'a> ExperimentHandle<'a> {
         )?;
 
         stmt.execute(rusqlite::named_params! {
+            ":experiment_label": self.experiment.label,
             ":x_int": datapoint.x.to_int(),
             ":x_float": datapoint.x.to_float(),
             ":y_int": datapoint.y.to_int(),
@@ -617,5 +538,196 @@ impl<'a> ExperimentHandle<'a> {
             ":y_float_75": datapoint.get_y_confidence(25).clone().map(|val| val.1.to_float()).flatten(),
         })?;
         Ok(())
+    }
+}
+
+fn find_config_dir() -> Result<PathBuf> {
+    let mut dir: PathBuf = Path::new(".").canonicalize()?;
+    while !dir.parent().is_none() {
+        let file = dir.join(BENCHER_CONFIG_FILENAME);
+        if file.exists() {
+            return Ok(dir);
+        }
+
+        dir.pop();
+    }
+
+    Err(BencherError::NotFound.into())
+}
+
+fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
+        | rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
+
+    match rusqlite::Connection::open_with_flags(db_path, flags) {
+        Ok(conn) => Ok(conn),
+        Err(e) => Err(BencherError::Database(e).into()),
+    }
+}
+
+fn setup_db(db: &rusqlite::Connection) -> Result<()> {
+    db.execute(
+        "create table if not exists results (
+            experiment_label text not null,
+
+            x_int int,
+            x_int_1 int,
+            x_int_5 int,
+            x_int_10 int,
+            x_int_25 int,
+            x_int_99 int,
+            x_int_95 int,
+            x_int_90 int,
+            x_int_75 int,
+
+            y_int int,
+            y_int_1 int,
+            y_int_5 int,
+            y_int_10 int,
+            y_int_25 int,
+            y_int_99 int,
+            y_int_95 int,
+            y_int_90 int,
+            y_int_75 int,
+
+            x_float float,
+            x_float_1 float,
+            x_float_5 float,
+            x_float_10 float,
+            x_float_25 float,
+            x_float_99 float,
+            x_float_95 float,
+            x_float_90 float,
+            x_float_75 float,
+
+            y_float float,
+            y_float_1 float,
+            y_float_5 float,
+            y_float_10 float,
+            y_float_25 float,
+            y_float_99 float,
+            y_float_95 float,
+            y_float_90 float,
+            y_float_75 float,
+
+            primary key (experiment_label, x_int, x_float, y_int, y_float)
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+mod test {
+    use super::*;
+
+    fn gen_experiments() -> Vec<Experiment> {
+        vec![
+            Experiment {
+                label: "Throughput Latency".to_string(),
+                x_label: "Throughput".to_string(),
+                x_units: "ops/s".to_string(),
+                y_label: "Latency".to_string(),
+                y_units: "s".to_string(),
+            },
+            Experiment {
+                label: "Throughput".to_string(),
+                x_label: "Offered Load".to_string(),
+                x_units: "ops/s".to_string(),
+                y_label: "Throughput".to_string(),
+                y_units: "ops/s".to_string(),
+            },
+        ]
+    }
+
+    fn gen_inner_config() -> BencherConfig {
+        BencherConfig {
+            database_filepath: "".to_string(),
+            experiments: gen_experiments(),
+        }
+    }
+
+    fn gen_in_memory_config() -> Config {
+        Config::from_conn_and_config(
+            rusqlite::Connection::open_in_memory().unwrap(),
+            gen_inner_config(),
+        )
+        .unwrap()
+    }
+
+    fn populate(handle: &ExperimentHandle) {
+        for x in (0..=100).step_by(10) {
+            handle
+                .add_datapoint(Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn config_experiments() {
+        let config = gen_in_memory_config();
+        assert_eq!(config.experiments(), gen_experiments());
+    }
+
+    #[test]
+    fn config_empty_status() {
+        let config = gen_in_memory_config();
+        assert_eq!(
+            config.status().unwrap().into_iter().collect::<HashSet<_>>(),
+            vec![
+                ExperimentStatus {
+                    label: "Throughput".to_string(),
+                    n_datapoints: 0
+                },
+                ExperimentStatus {
+                    label: "Throughput Latency".to_string(),
+                    n_datapoints: 0
+                },
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
+        );
+    }
+
+    #[test]
+    fn config_get_handle() {
+        let config = gen_in_memory_config();
+        assert!(config.get_experiment_handle("Latency").is_none());
+        assert!(config.get_experiment_handle("Throughput").is_some());
+    }
+
+    #[test]
+    fn can_populate() {
+        let config = gen_in_memory_config();
+        let handle = config.get_experiment_handle("Throughput").unwrap();
+        populate(&handle);
+    }
+
+    #[test]
+    fn can_get() {
+        let config = gen_in_memory_config();
+        let handle = config.get_experiment_handle("Throughput").unwrap();
+        populate(&handle);
+
+        assert_eq!(
+            handle.get_datapoints().unwrap(),
+            (0..=100)
+                .step_by(10)
+                .into_iter()
+                .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+                .collect::<Vec<Datapoint>>()
+        );
+        assert_eq!(
+            handle.get_datapoints_magnitudes().unwrap(),
+            (
+                (0..=100)
+                    .step_by(10)
+                    .into_iter()
+                    .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+                    .collect::<Vec<Datapoint>>(),
+                Magnitude::Normal,
+                Magnitude::Kilo
+            )
+        );
     }
 }

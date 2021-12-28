@@ -13,32 +13,34 @@ fn main() -> Result<()> {
         .subcommand(
             SubCommand::with_name("list")
                 .about("list the available experiments")
-                .arg(Arg::with_name("experiment_label").help("the experiment to use")),
+                .arg(Arg::with_name("experiment_type").help("the experiment to use")),
         )
         .subcommand(
             SubCommand::with_name("status")
                 .about("queries the database to see how many datapoints we have per test label")
-                .arg(Arg::with_name("experiment_label").help("the experiment to use")),
+                .arg(Arg::with_name("experiment_type").help("the experiment to use")),
         )
         .subcommand(
             SubCommand::with_name("table")
                 .about("get the results for a specific experiment in tabular form")
-                .arg(Arg::with_name("experiment_label").help("the experiment to use")),
+                .arg(Arg::with_name("experiment_type").help("the experiment to use")),
         )
         .subcommand(
             SubCommand::with_name("latex")
                 .about("get the results for a specific experiment in a latex table form")
-                .arg(Arg::with_name("experiment_label").help("the experiment to use")),
+                .arg(Arg::with_name("experiment_type").help("the experiment to use")),
         )
         .subcommand(
             SubCommand::with_name("dat")
                 .about("get the results for a specific experiment in a .dat form")
-                .arg(Arg::with_name("experiment_label").help("the experiment to use")),
+                .arg(Arg::with_name("experiment_type").help("the experiment to use"))
+                .arg(Arg::with_name("prefix").help("the prefix for the files")),
         )
         .subcommand(
             SubCommand::with_name("gnuplot")
                 .about("get the gnuplot representation for an experiment")
-                .arg(Arg::with_name("experiment_label").help("the experiment to use")),
+                .arg(Arg::with_name("experiment_type").help("the experiment to use"))
+                .arg(Arg::with_name("prefix").help("the prefix for the files")),
         )
         .get_matches();
 
@@ -63,13 +65,13 @@ fn main() -> Result<()> {
             config
                 .get_experiment_handle(process_sub_matches(&config, matches)?)
                 .unwrap()
-                .dump_dat()?;
+                .dump_dat(matches.value_of("prefix").unwrap_or("xxx_"))?;
         }
         ("gnuplot", Some(matches)) => {
             config
                 .get_experiment_handle(process_sub_matches(&config, matches)?)
                 .unwrap()
-                .dump_gnuplot()?;
+                .dump_gnuplot(matches.value_of("prefix").unwrap_or("xxx_"))?;
         }
         _ => {}
     }
@@ -81,9 +83,9 @@ fn process_sub_matches<'a, 'b>(config: &'a Config, matches: &'b ArgMatches) -> R
     let available_experiments = config
         .experiments()
         .into_iter()
-        .map(|e| e.label)
+        .map(|e| e.exp_type)
         .collect::<Vec<_>>();
-    Ok(match matches.value_of("experiment_label") {
+    Ok(match matches.value_of("experiment_type") {
         None => Err(BencherError::MissingExperiment(
             available_experiments.join(","),
         ))?,

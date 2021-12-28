@@ -3,7 +3,7 @@ use either::Either;
 use eyre::Result;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 
 mod error;
@@ -13,6 +13,7 @@ pub use error::*;
 pub use model::*;
 
 const BENCHER_CONFIG_FILENAME: &str = ".bencher-config";
+const COLORS: [&str; 5] = ["f6511d", "ffb400", "00a6ed", "7fb800", "0d2c54"];
 
 pub struct Config {
     db: rusqlite::Connection,
@@ -20,6 +21,16 @@ pub struct Config {
 }
 
 pub struct ExperimentHandle<'a> {
+    db: &'a rusqlite::Connection,
+    experiments: Vec<Experiment>,
+    exp_type: String,
+    x_label: String,
+    x_units: String,
+    y_label: String,
+    y_units: String,
+}
+
+pub struct InserterHandle<'a> {
     db: &'a rusqlite::Connection,
     experiment: Experiment,
 }
@@ -47,14 +58,6 @@ impl<'a> Config {
     ) -> Result<Self> {
         setup_db(&db)?;
         Ok(Self { db, inner_config })
-    }
-
-    pub fn has_experiment(&self, code: &str) -> bool {
-        self.inner_config
-            .experiments
-            .iter()
-            .find(|e| e.code == code)
-            .is_some()
     }
 
     pub fn experiments(&self) -> Vec<Experiment> {
@@ -91,21 +94,59 @@ impl<'a> Config {
         Ok(map.into_iter().map(|(_, v)| v).collect())
     }
 
-    pub fn get_experiment_handle(&'a self, code: &str) -> Option<ExperimentHandle<'a>> {
+    pub fn has_experiment(&self, exp_type: &str) -> bool {
+        self.inner_config
+            .experiments
+            .iter()
+            .find(|e| e.exp_type == exp_type)
+            .is_some()
+    }
+
+    pub fn get_experiment_handle(&'a self, exp_type: &str) -> Option<ExperimentHandle<'a>> {
+        ExperimentHandle::new(
+            &self.db,
+            self.inner_config
+                .experiments
+                .iter()
+                .filter(|e| e.exp_type == exp_type)
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn get_inserter_handle(&'a self, code: &str) -> Option<InserterHandle<'a>> {
         self.inner_config
             .experiments
             .iter()
             .find(|e| e.code == code)
-            .map(|e| ExperimentHandle::new(&self.db, e.clone()))
+            .map(|e| InserterHandle::new(&self.db, e.clone()))
     }
 }
 
 impl<'a> ExperimentHandle<'a> {
-    fn new(db: &'a rusqlite::Connection, experiment: Experiment) -> Self {
-        Self { db, experiment }
+    fn new(db: &'a rusqlite::Connection, experiments: Vec<Experiment>) -> Option<Self> {
+        if experiments.len() == 0 || !experiments.iter().all(|x| x.is_compatible(&experiments[0])) {
+            eprintln!("AAAAAAA {}", experiments.len());
+            None
+        } else {
+            let exp_type = experiments[0].exp_type.clone();
+            let x_label = experiments[0].x_label.clone();
+            let x_units = experiments[0].x_units.clone();
+            let y_label = experiments[0].y_label.clone();
+            let y_units = experiments[0].y_units.clone();
+            Some(Self {
+                db,
+                experiments,
+                exp_type,
+                x_label,
+                x_units,
+                y_label,
+                y_units,
+            })
+        }
     }
 
-    fn get_datapoints(&self) -> Result<Vec<Datapoint>> {
+    fn get_datapoints(&self) -> Result<HashMap<String, Vec<Datapoint>>> {
         fn create_confidence_arg(
             min_int: Option<i64>,
             max_int: Option<i64>,
@@ -148,133 +189,142 @@ impl<'a> ExperimentHandle<'a> {
                     y_int_25,   y_int_75,
                     y_float_25, y_float_75
              from results
-             where experiment_code = :code",
+             where experiment_type = :exp_type and experiment_label = :exp_label",
         )?;
 
-        let mut vec = vec![];
-        for datapoint in stmt.query_map(
-            rusqlite::named_params! { ":code": &self.experiment.code },
-            |row| {
-                let mut datapoint = Datapoint::new(
-                    row.get(0).unwrap(),
-                    row.get(1).unwrap(),
-                    row.get(2).unwrap(),
-                    row.get(3).unwrap(),
-                )?;
+        let mut map = HashMap::with_capacity(self.experiments.len());
+        for exp in &self.experiments {
+            let mut vec = vec![];
+            for datapoint in stmt.query_map(
+                rusqlite::named_params! { ":exp_type": &self.exp_type, ":exp_label": &exp.label },
+                |row| {
+                    let mut datapoint = Datapoint::new(
+                        row.get(0).unwrap(),
+                        row.get(1).unwrap(),
+                        row.get(2).unwrap(),
+                        row.get(3).unwrap(),
+                    )?;
 
-                // x 1 - 99
-                if let Some(e) = create_confidence_arg(
-                    row.get(4).unwrap(),
-                    row.get(5).unwrap(),
-                    row.get(6).unwrap(),
-                    row.get(7).unwrap(),
-                ) {
-                    let _ = datapoint.add_x_confidence(1, e);
-                }
+                    // x 1 - 99
+                    if let Some(e) = create_confidence_arg(
+                        row.get(4).unwrap(),
+                        row.get(5).unwrap(),
+                        row.get(6).unwrap(),
+                        row.get(7).unwrap(),
+                    ) {
+                        let _ = datapoint.add_x_confidence(1, e);
+                    }
 
-                // x 5 - 95
-                if let Some(e) = create_confidence_arg(
-                    row.get(8).unwrap(),
-                    row.get(9).unwrap(),
-                    row.get(10).unwrap(),
-                    row.get(11).unwrap(),
-                ) {
-                    let _ = datapoint.add_x_confidence(5, e);
-                }
+                    // x 5 - 95
+                    if let Some(e) = create_confidence_arg(
+                        row.get(8).unwrap(),
+                        row.get(9).unwrap(),
+                        row.get(10).unwrap(),
+                        row.get(11).unwrap(),
+                    ) {
+                        let _ = datapoint.add_x_confidence(5, e);
+                    }
 
-                // x 10 - 90
-                if let Some(e) = create_confidence_arg(
-                    row.get(12).unwrap(),
-                    row.get(13).unwrap(),
-                    row.get(14).unwrap(),
-                    row.get(15).unwrap(),
-                ) {
-                    let _ = datapoint.add_x_confidence(10, e);
-                }
+                    // x 10 - 90
+                    if let Some(e) = create_confidence_arg(
+                        row.get(12).unwrap(),
+                        row.get(13).unwrap(),
+                        row.get(14).unwrap(),
+                        row.get(15).unwrap(),
+                    ) {
+                        let _ = datapoint.add_x_confidence(10, e);
+                    }
 
-                // x 25 - 75
-                if let Some(e) = create_confidence_arg(
-                    row.get(16).unwrap(),
-                    row.get(17).unwrap(),
-                    row.get(18).unwrap(),
-                    row.get(19).unwrap(),
-                ) {
-                    let _ = datapoint.add_x_confidence(10, e);
-                }
+                    // x 25 - 75
+                    if let Some(e) = create_confidence_arg(
+                        row.get(16).unwrap(),
+                        row.get(17).unwrap(),
+                        row.get(18).unwrap(),
+                        row.get(19).unwrap(),
+                    ) {
+                        let _ = datapoint.add_x_confidence(10, e);
+                    }
 
-                // y 1 - 99
-                if let Some(e) = create_confidence_arg(
-                    row.get(20).unwrap(),
-                    row.get(21).unwrap(),
-                    row.get(22).unwrap(),
-                    row.get(23).unwrap(),
-                ) {
-                    let _ = datapoint.add_y_confidence(1, e);
-                }
+                    // y 1 - 99
+                    if let Some(e) = create_confidence_arg(
+                        row.get(20).unwrap(),
+                        row.get(21).unwrap(),
+                        row.get(22).unwrap(),
+                        row.get(23).unwrap(),
+                    ) {
+                        let _ = datapoint.add_y_confidence(1, e);
+                    }
 
-                // y 5 - 95
-                if let Some(e) = create_confidence_arg(
-                    row.get(24).unwrap(),
-                    row.get(25).unwrap(),
-                    row.get(26).unwrap(),
-                    row.get(27).unwrap(),
-                ) {
-                    let _ = datapoint.add_y_confidence(5, e);
-                }
+                    // y 5 - 95
+                    if let Some(e) = create_confidence_arg(
+                        row.get(24).unwrap(),
+                        row.get(25).unwrap(),
+                        row.get(26).unwrap(),
+                        row.get(27).unwrap(),
+                    ) {
+                        let _ = datapoint.add_y_confidence(5, e);
+                    }
 
-                // y 10 - 90
-                if let Some(e) = create_confidence_arg(
-                    row.get(28).unwrap(),
-                    row.get(29).unwrap(),
-                    row.get(30).unwrap(),
-                    row.get(31).unwrap(),
-                ) {
-                    let _ = datapoint.add_y_confidence(10, e);
-                }
+                    // y 10 - 90
+                    if let Some(e) = create_confidence_arg(
+                        row.get(28).unwrap(),
+                        row.get(29).unwrap(),
+                        row.get(30).unwrap(),
+                        row.get(31).unwrap(),
+                    ) {
+                        let _ = datapoint.add_y_confidence(10, e);
+                    }
 
-                // y 25 - 75
-                if let Some(e) = create_confidence_arg(
-                    row.get(32).unwrap(),
-                    row.get(33).unwrap(),
-                    row.get(34).unwrap(),
-                    row.get(35).unwrap(),
-                ) {
-                    let _ = datapoint.add_y_confidence(10, e);
-                }
-                Ok(datapoint)
-            },
-        )? {
-            vec.push(datapoint?);
+                    // y 25 - 75
+                    if let Some(e) = create_confidence_arg(
+                        row.get(32).unwrap(),
+                        row.get(33).unwrap(),
+                        row.get(34).unwrap(),
+                        row.get(35).unwrap(),
+                    ) {
+                        let _ = datapoint.add_y_confidence(10, e);
+                    }
+                    Ok(datapoint)
+                },
+            )? {
+                vec.push(datapoint?);
+            }
+
+            map.insert(exp.label.clone(), vec);
         }
 
-        Ok(vec)
+        Ok(map)
     }
 
-    fn get_datapoints_magnitudes(&self) -> Result<(Vec<Datapoint>, Magnitude, Magnitude)> {
+    fn get_datapoints_magnitudes(
+        &self,
+    ) -> Result<(HashMap<String, Vec<Datapoint>>, Magnitude, Magnitude)> {
         let datapoints = self.get_datapoints()?;
         let mut x_magnitude_counts = [0; 7];
         let mut y_magnitude_counts = [0; 7];
 
-        datapoints.iter().for_each(|d| {
-            let (x_mag, y_mag) = d.magnitudes();
-            match x_mag {
-                Magnitude::Nano => x_magnitude_counts[0] += 1,
-                Magnitude::Micro => x_magnitude_counts[1] += 1,
-                Magnitude::Mili => x_magnitude_counts[2] += 1,
-                Magnitude::Normal => x_magnitude_counts[3] += 1,
-                Magnitude::Kilo => x_magnitude_counts[4] += 1,
-                Magnitude::Mega => x_magnitude_counts[5] += 1,
-                Magnitude::Giga => x_magnitude_counts[6] += 1,
-            }
-            match y_mag {
-                Magnitude::Nano => y_magnitude_counts[0] += 1,
-                Magnitude::Micro => y_magnitude_counts[1] += 1,
-                Magnitude::Mili => y_magnitude_counts[2] += 1,
-                Magnitude::Normal => y_magnitude_counts[3] += 1,
-                Magnitude::Kilo => y_magnitude_counts[4] += 1,
-                Magnitude::Mega => y_magnitude_counts[5] += 1,
-                Magnitude::Giga => y_magnitude_counts[6] += 1,
-            }
+        datapoints.values().for_each(|v| {
+            v.iter().for_each(|d| {
+                let (x_mag, y_mag) = d.magnitudes();
+                match x_mag {
+                    Magnitude::Nano => x_magnitude_counts[0] += 1,
+                    Magnitude::Micro => x_magnitude_counts[1] += 1,
+                    Magnitude::Mili => x_magnitude_counts[2] += 1,
+                    Magnitude::Normal => x_magnitude_counts[3] += 1,
+                    Magnitude::Kilo => x_magnitude_counts[4] += 1,
+                    Magnitude::Mega => x_magnitude_counts[5] += 1,
+                    Magnitude::Giga => x_magnitude_counts[6] += 1,
+                }
+                match y_mag {
+                    Magnitude::Nano => y_magnitude_counts[0] += 1,
+                    Magnitude::Micro => y_magnitude_counts[1] += 1,
+                    Magnitude::Mili => y_magnitude_counts[2] += 1,
+                    Magnitude::Normal => y_magnitude_counts[3] += 1,
+                    Magnitude::Kilo => y_magnitude_counts[4] += 1,
+                    Magnitude::Mega => y_magnitude_counts[5] += 1,
+                    Magnitude::Giga => y_magnitude_counts[6] += 1,
+                }
+            })
         });
 
         let (x_idx, _) = x_magnitude_counts
@@ -314,86 +364,94 @@ impl<'a> ExperimentHandle<'a> {
     pub fn dump_table(&self) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
-        let table = datapoints
-            .into_iter()
-            .map(|d| {
-                vec![
-                    d.x.display_with_magnitude(x_mag)
+        for (label, datapoints) in datapoints {
+            let table = datapoints
+                .into_iter()
+                .map(|d| {
+                    vec![
+                        d.x.display_with_magnitude(x_mag)
+                            .cell()
+                            .justify(Justify::Right),
+                        d.y.display_with_magnitude(y_mag)
+                            .cell()
+                            .justify(Justify::Right),
+                    ]
+                })
+                .collect::<Vec<_>>()
+                .table()
+                .title(vec![
+                    format!("{} ({}{})", self.x_label, x_mag.prefix(), self.x_units)
                         .cell()
-                        .justify(Justify::Right),
-                    d.y.display_with_magnitude(y_mag)
+                        .justify(Justify::Center)
+                        .bold(true),
+                    format!("{} ({}{})", self.y_label, y_mag.prefix(), self.y_units)
                         .cell()
-                        .justify(Justify::Right),
-                ]
-            })
-            .collect::<Vec<_>>()
-            .table()
-            .title(vec![
-                format!(
-                    "{} ({}{})",
-                    self.experiment.x_label,
-                    x_mag.prefix(),
-                    self.experiment.x_units
-                )
-                .cell()
-                .justify(Justify::Center)
-                .bold(true),
-                format!(
-                    "{} ({}{})",
-                    self.experiment.y_label,
-                    y_mag.prefix(),
-                    self.experiment.y_units
-                )
-                .cell()
-                .justify(Justify::Center)
-                .bold(true),
-            ])
-            .bold(true);
+                        .justify(Justify::Center)
+                        .bold(true),
+                ])
+                .bold(true);
 
-        cli_table::print_stdout(table)?;
+            println!(">> {} <<", label);
+            cli_table::print_stdout(table)?;
+        }
         Ok(())
     }
 
     pub fn dump_latex_table(&self) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
-        println!("\\begin{{table}}[t]\n    \\centering\n    \\begin{{tabular}}{{|r|r|}}\n        \\hline");
-        println!(
-            "        \\textbf{{ {} ({}{}) }} & \\textbf{{ {} ({}{}) }} \\\\ \\hline",
-            self.experiment.x_label,
-            x_mag.prefix(),
-            self.experiment.x_units,
-            self.experiment.y_label,
-            y_mag.prefix(),
-            self.experiment.y_units
-        );
-        for d in datapoints {
+        for (label, datapoints) in datapoints {
+            println!("\\begin{{table}}[t]\n    \\centering\n    \\begin{{tabular}}{{|r|r|}}\n        \\hline");
             println!(
-                "        ${:>8}$ & ${:>8}$ \\\\ \\hline",
-                d.x.display_with_magnitude(x_mag),
-                d.y.display_with_magnitude(y_mag)
-            )
+                "        \\textbf{{ {} ({}{}) }} & \\textbf{{ {} ({}{}) }} \\\\ \\hline",
+                self.x_label,
+                x_mag.prefix(),
+                self.x_units,
+                self.y_label,
+                y_mag.prefix(),
+                self.y_units
+            );
+            for d in datapoints {
+                println!(
+                    "        ${:>8}$ & ${:>8}$ \\\\ \\hline",
+                    d.x.display_with_magnitude(x_mag),
+                    d.y.display_with_magnitude(y_mag)
+                )
+            }
+            println!(
+                "    \\end{{tabular}}\n    \\caption{{Caption: {0}}}\\label{{table:{0}}}\n\\end{{table}}", label
+            );
         }
-        println!(
-            "    \\end{{tabular}}\n    \\caption{{Caption}}\\label{{table:label}}\n\\end{{table}}"
-        );
         Ok(())
     }
 
-    pub fn dump_gnuplot(&self) -> Result<()> {
-        let (_, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
+    pub fn dump_gnuplot(&self, prefix: &str) -> Result<()> {
+        let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
         println!(
             "reset
 
 set terminal postscript eps colour size 12cm,8cm enhanced font 'Helvetica,20'
-set output 'TODO.eps'
+set output '{}.eps'
 
 set border linewidth 0.75
-set key outside above
+set key outside above",
+            prefix
+        );
 
-# Set color of linestyle 1 to #8b0000
-set style line 1 linecolor rgb '#8b0000' linetype 2 linewidth 2.5 pointtype 4 pointsize 2 dashtype 2
-# Set yerror color of linestyle 2 to #8b0000
-set style line 2 linecolor rgb '#8b0000' linetype 2 linewidth 2.5 pointtype 4 pointsize 2
+        for (idx, _) in datapoints.iter().enumerate() {
+            println!(
+"# Set color of linestyle {0} to #{3}
+set style line {0} linecolor rgb '#{3}' linetype 2 linewidth 2.5 pointtype {2} pointsize 2 dashtype 2
+# Set yerror color of linestyle {1} to #{2}
+set style line {1} linecolor rgb '#{3}' linetype 2 linewidth 2.5 pointtype {2} pointsize 2",
+                2 * idx + 1,
+                2 * idx + 2,
+                idx + 4,
+                COLORS[idx % COLORS.len()]
+                )
+        }
+
+        println!(
+            "
 
 # set axis
 set tics scale 0.75
@@ -401,40 +459,66 @@ set xlabel '{} ({}{})'
 set ylabel '{} ({}{})'
 set xrange [*:*]
 set yrange [*:*]
-plot 'TODO.dat' title '{}' with lp linestyle 1
 ",
-            self.experiment.x_label,
+            self.x_label,
             x_mag.prefix(),
-            self.experiment.x_units,
-            self.experiment.y_label,
+            self.x_units,
+            self.y_label,
             y_mag.prefix(),
-            self.experiment.y_units,
-            self.experiment.label
+            self.y_units,
+        );
+
+        println!(
+            "plot {}",
+            datapoints
+                .iter()
+                .enumerate()
+                .map(|(idx, (label, _))| format!(
+                    "'{}_{}.dat' title '{}' with lp linestyle {}",
+                    prefix,
+                    label.to_lowercase(),
+                    label,
+                    2 * idx + 1
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         Ok(())
     }
 
-    pub fn dump_dat(&self) -> Result<()> {
+    pub fn dump_dat(&self, prefix: &str) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
-        println!(
-            "# x axis: {} ({}{})\n# y axis: {} ({}{})\n",
-            self.experiment.x_label,
-            x_mag.prefix(),
-            self.experiment.x_units,
-            self.experiment.y_label,
-            y_mag.prefix(),
-            self.experiment.y_units
-        );
-        for d in datapoints {
-            println!(
-                "{:>8} {:>8}",
-                d.x.display_with_magnitude(x_mag),
-                d.y.display_with_magnitude(y_mag)
-            );
+        for (label, datapoints) in datapoints {
+            let mut file = File::create(format!("{}_{}.dat", prefix, label.to_lowercase()))?;
+            writeln!(
+                &mut file,
+                "# {}\n# x axis: {} ({}{})\n# y axis: {} ({}{})\n",
+                label,
+                self.x_label,
+                x_mag.prefix(),
+                self.x_units,
+                self.y_label,
+                y_mag.prefix(),
+                self.y_units
+            )?;
+            for d in datapoints {
+                writeln!(
+                    &mut file,
+                    "{:>8} {:>8}",
+                    d.x.display_with_magnitude(x_mag),
+                    d.y.display_with_magnitude(y_mag)
+                )?;
+            }
+            writeln!(&mut file, "# end")?;
         }
-        println!("# end");
         Ok(())
+    }
+}
+
+impl<'a> InserterHandle<'a> {
+    fn new(db: &'a rusqlite::Connection, experiment: Experiment) -> Self {
+        Self { db, experiment }
     }
 
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
@@ -713,7 +797,7 @@ mod test {
         .unwrap()
     }
 
-    fn populate(handle: &ExperimentHandle) {
+    fn populate(handle: &InserterHandle) {
         for x in (0..=100).step_by(10) {
             handle
                 .add_datapoint(Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
@@ -754,44 +838,50 @@ mod test {
     #[test]
     fn config_get_handle() {
         let config = gen_in_memory_config();
-        assert!(config.get_experiment_handle("Latency").is_none());
         assert_eq!(config.has_experiment("Latency"), false);
-        assert!(config.get_experiment_handle("tput_xxx").is_some());
-        assert_eq!(config.has_experiment("tput_xxx"), true);
+        assert!(config.get_experiment_handle("Latency").is_none());
+        assert_eq!(config.has_experiment("Throughput"), true);
+        assert!(config.get_experiment_handle("Throughput").is_some());
     }
 
     #[test]
     fn can_populate() {
         let config = Config::new().unwrap();
-        let handle = config.get_experiment_handle("tput_xxx").unwrap();
+        let handle = config.get_inserter_handle("tput_xxx").unwrap();
         populate(&handle);
     }
 
     #[test]
     fn can_get() {
         let config = gen_in_memory_config();
-        let handle = config.get_experiment_handle("tput_xxx").unwrap();
-        populate(&handle);
+        let inserter_handle = config.get_inserter_handle("tput_xxx").unwrap();
+        populate(&inserter_handle);
+
+        let handle = config.get_experiment_handle("Throughput").unwrap();
 
         assert_eq!(
-            handle.get_datapoints().unwrap(),
-            (0..=100)
+            handle
+                .get_datapoints()
+                .unwrap()
+                .values()
+                .find(|_| true)
+                .unwrap(),
+            &(0..=100)
                 .step_by(10)
                 .into_iter()
                 .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
                 .collect::<Vec<Datapoint>>()
         );
+        let (datapoints, x_mag, y_mag) = handle.get_datapoints_magnitudes().unwrap();
         assert_eq!(
-            handle.get_datapoints_magnitudes().unwrap(),
-            (
-                (0..=100)
-                    .step_by(10)
-                    .into_iter()
-                    .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
-                    .collect::<Vec<Datapoint>>(),
-                Magnitude::Normal,
-                Magnitude::Kilo
-            )
+            datapoints.values().find(|_| true).unwrap(),
+            &(0..=100)
+                .step_by(10)
+                .into_iter()
+                .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+                .collect::<Vec<Datapoint>>()
         );
+        assert_eq!(x_mag, Magnitude::Normal);
+        assert_eq!(y_mag, Magnitude::Kilo);
     }
 }

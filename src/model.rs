@@ -85,7 +85,7 @@ impl Value {
 
     fn magnitude(&self) -> Magnitude {
         match self {
-            Value::Int(i) => match i {
+            Value::Int(i) => match i.abs() {
                 0..=999 => Magnitude::Normal,
                 1_000..=999_999 => Magnitude::Kilo,
                 1_000_000..=999_999_999 => Magnitude::Mega,
@@ -128,7 +128,7 @@ impl Value {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Datapoint {
     pub x: Value,
 
@@ -229,8 +229,6 @@ impl Datapoint {
 
 #[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct Experiment {
-    pub code: String,
-    pub label: String,
     pub exp_type: String,
     pub x_label: String,
     pub x_units: String,
@@ -238,14 +236,10 @@ pub struct Experiment {
     pub y_units: String,
 }
 
-impl Experiment {
-    pub fn is_compatible(&self, other: &Self) -> bool {
-        self.exp_type == other.exp_type
-            && self.x_label == other.x_label
-            && self.x_units == other.x_units
-            && self.y_label == other.y_label
-            && self.y_units == other.y_units
-    }
+pub struct ExperimentLine {
+    pub experiment: Experiment,
+    pub label: String,
+    pub code: String,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -405,75 +399,5 @@ mod test {
             .unwrap()
             .add_y_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_ok());
-    }
-
-    #[test]
-    fn experiment_compatibility() {
-        let exp1 = Experiment {
-            code: "tput_latency_xyz".to_string(),
-            exp_type: "Throughput Latency".to_string(),
-            label: "Read".to_string(),
-            x_label: "Throughput".to_string(),
-            x_units: "ops/s".to_string(),
-            y_label: "Latency".to_string(),
-            y_units: "s".to_string(),
-        };
-
-        let exp2 = Experiment {
-            code: "tput_latency_abc".to_string(),
-            exp_type: "Throughput Latency".to_string(),
-            label: "Write".to_string(),
-            x_label: "Throughput".to_string(),
-            x_units: "ops/s".to_string(),
-            y_label: "Latency".to_string(),
-            y_units: "s".to_string(),
-        };
-
-        let exp3 = Experiment {
-            code: "tput_latency_abc".to_string(),
-            exp_type: "Throughput Latency".to_string(),
-            label: "Write".to_string(),
-            x_label: "Throughput".to_string(),
-            x_units: "ops".to_string(),
-            y_label: "Latency".to_string(),
-            y_units: "s".to_string(),
-        };
-
-        let exp4 = Experiment {
-            code: "tput_latency_abc".to_string(),
-            exp_type: "Throughput Latency".to_string(),
-            label: "Write".to_string(),
-            x_label: "Latency".to_string(),
-            x_units: "ops/s".to_string(),
-            y_label: "Latency".to_string(),
-            y_units: "s".to_string(),
-        };
-
-        let exp5 = Experiment {
-            code: "tput_latency_abc".to_string(),
-            exp_type: "Throughput Latency".to_string(),
-            label: "Write".to_string(),
-            x_label: "Latency".to_string(),
-            x_units: "ops/s".to_string(),
-            y_label: "Latency".to_string(),
-            y_units: "s".to_string(),
-        };
-
-        let exp6 = Experiment {
-            code: "tput_latency_zzz".to_string(),
-            exp_type: "Throughput".to_string(),
-            label: "Write".to_string(),
-            x_label: "Throughput".to_string(),
-            x_units: "ops/s".to_string(),
-            y_label: "Latency".to_string(),
-            y_units: "s".to_string(),
-        };
-
-        assert!(exp1.is_compatible(&exp1));
-        assert!(exp1.is_compatible(&exp2));
-        assert!(!exp1.is_compatible(&exp3));
-        assert!(!exp1.is_compatible(&exp4));
-        assert!(!exp1.is_compatible(&exp5));
-        assert!(!exp1.is_compatible(&exp6));
     }
 }

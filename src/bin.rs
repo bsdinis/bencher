@@ -42,6 +42,13 @@ fn main() -> Result<()> {
                 .arg(Arg::with_name("experiment_type").help("the experiment to use"))
                 .arg(Arg::with_name("prefix").help("the prefix for the files")),
         )
+        .subcommand(
+            SubCommand::with_name("add")
+                .about("add a new experiment")
+                .arg(Arg::with_name("experiment_type").help("the experiment type"))
+                .arg(Arg::with_name("experiment_label").help("the label for this experiment"))
+                .arg(Arg::with_name("experiment_code").help("the code for this experiment")),
+        )
         .get_matches();
 
     let config = Config::new()?;
@@ -51,27 +58,34 @@ fn main() -> Result<()> {
         ("status", Some(_)) => status(&config)?,
         ("table", Some(matches)) => {
             config
-                .get_experiment_handle(process_sub_matches(&config, matches)?)
+                .get_experiment_handle(extract_experiment_type(&config, matches)?)
                 .unwrap()
                 .dump_table()?;
         }
         ("latex", Some(matches)) => {
             config
-                .get_experiment_handle(process_sub_matches(&config, matches)?)
+                .get_experiment_handle(extract_experiment_type(&config, matches)?)
                 .unwrap()
                 .dump_latex_table()?;
         }
         ("dat", Some(matches)) => {
             config
-                .get_experiment_handle(process_sub_matches(&config, matches)?)
+                .get_experiment_handle(extract_experiment_type(&config, matches)?)
                 .unwrap()
-                .dump_dat(matches.value_of("prefix").unwrap_or("xxx_"))?;
+                .dump_dat(matches.value_of("prefix").unwrap_or("xxx"))?;
         }
         ("gnuplot", Some(matches)) => {
             config
-                .get_experiment_handle(process_sub_matches(&config, matches)?)
+                .get_experiment_handle(extract_experiment_type(&config, matches)?)
                 .unwrap()
-                .dump_gnuplot(matches.value_of("prefix").unwrap_or("xxx_"))?;
+                .dump_gnuplot(matches.value_of("prefix").unwrap_or("xxx"))?;
+        }
+        ("add", Some(matches)) => {
+            config.add_experiment(
+                extract_experiment_type(&config, matches)?,
+                extract_experiment_label(matches)?,
+                extract_experiment_code(matches)?,
+            )?;
         }
         _ => {}
     }
@@ -79,7 +93,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn process_sub_matches<'a, 'b>(config: &'a Config, matches: &'b ArgMatches) -> Result<&'b str> {
+fn extract_experiment_type<'a, 'b>(config: &'a Config, matches: &'b ArgMatches) -> Result<&'b str> {
     let available_experiments = config
         .experiments()
         .into_iter()
@@ -102,19 +116,37 @@ fn process_sub_matches<'a, 'b>(config: &'a Config, matches: &'b ArgMatches) -> R
     })
 }
 
+fn extract_experiment_label<'a>(matches: &'a ArgMatches) -> Result<&'a str> {
+    Ok(match matches.value_of("experiment_label") {
+        None => Err(BencherError::MissingLabel)?,
+        Some(label) => label,
+    })
+}
+
+fn extract_experiment_code<'a>(matches: &'a ArgMatches) -> Result<&'a str> {
+    Ok(match matches.value_of("experiment_code") {
+        None => Err(BencherError::MissingCode)?,
+        Some(label) => label,
+    })
+}
+
 fn list(config: &Config) -> Result<()> {
     let table = config
-        .experiments()
+        .experiment_lines()?
         .into_iter()
         .map(|e| {
             vec![
                 e.code.cell().justify(Justify::Center).bold(true),
-                e.exp_type.cell().justify(Justify::Center).bold(true),
+                e.experiment
+                    .exp_type
+                    .cell()
+                    .justify(Justify::Center)
+                    .bold(true),
                 e.label.cell().justify(Justify::Center).bold(true),
-                e.x_label.cell().justify(Justify::Center),
-                e.x_units.cell().justify(Justify::Center),
-                e.y_label.cell().justify(Justify::Center),
-                e.y_units.cell().justify(Justify::Center),
+                e.experiment.x_label.cell().justify(Justify::Center),
+                e.experiment.x_units.cell().justify(Justify::Center),
+                e.experiment.y_label.cell().justify(Justify::Center),
+                e.experiment.y_units.cell().justify(Justify::Center),
             ]
         })
         .collect::<Vec<_>>()

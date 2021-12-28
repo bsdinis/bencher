@@ -24,8 +24,17 @@ pub enum BencherError {
     #[error("Point type and error bar type do not match")]
     MismatchedTypes,
 
-    #[error("No experiment provided. Available experiments: {0}")]
+    #[error("No experiment type provided. Available experiments: {0}")]
     MissingExperiment(String),
+
+    #[error("No experiment label provided")]
+    MissingLabel,
+
+    #[error("No experiment code provided")]
+    MissingCode,
+
+    #[error("No lines found for experiment type {0}")]
+    NoLines(String),
 
     #[error("Experiment `{0}` not found. Available experiments: {1}")]
     ExperimentNotFound(String, String),

@@ -22,8 +22,7 @@ pub struct Config {
 
 pub struct ExperimentHandle<'a> {
     db: &'a rusqlite::Connection,
-    experiments: Vec<Experiment>,
-    exp_type: String,
+    lines: Vec<ExperimentLine>,
     x_label: String,
     x_units: String,
     y_label: String,
@@ -32,7 +31,7 @@ pub struct ExperimentHandle<'a> {
 
 pub struct InserterHandle<'a> {
     db: &'a rusqlite::Connection,
-    experiment: Experiment,
+    experiment_line: ExperimentLine,
 }
 
 impl<'a> Config {
@@ -60,22 +59,122 @@ impl<'a> Config {
         Ok(Self { db, inner_config })
     }
 
+    pub fn add_experiment(&self, exp_type: &str, label: &str, code: &str) -> Result<()> {
+        let mut stmt = self.db.prepare(
+            "insert into experiments (
+                    experiment_type,
+                    experiment_label,
+                    experiment_code
+                    ) values (
+                    :exp_type,
+                    :label,
+                    :code)",
+        )?;
+
+        stmt.execute(rusqlite::named_params! {
+            ":exp_type": exp_type,
+            ":label": label,
+            ":code": code,
+        })?;
+
+        Ok(())
+    }
+
+    fn get_experiment(&self, exp_type: &str) -> Result<Experiment> {
+        Ok(self
+            .inner_config
+            .experiments
+            .iter()
+            .find(|e| e.exp_type == exp_type)
+            .ok_or_else(|| {
+                BencherError::ExperimentNotFound(
+                    exp_type.to_string(),
+                    self.inner_config
+                        .experiments
+                        .iter()
+                        .map(|e| e.exp_type.clone())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                )
+            })?
+            .clone())
+    }
+
+    fn get_experiment_line(&self, code: &str) -> Result<ExperimentLine> {
+        let (label, exp_type) = self
+            .db
+            .query_row("select experiment_label, experiment_type from experiments where experiment_code = :code",
+                       rusqlite::named_params! {":code": code}, |row| Ok((row.get(0).unwrap_or("".to_string()).clone(), row.get(1).unwrap_or("".to_string()).clone())))?;
+
+        self.get_experiment(&exp_type).map(|e| ExperimentLine {
+            experiment: e,
+            label,
+            code: code.to_string(),
+        })
+    }
+
+    fn get_experiment_lines(&self, exp_type: &str) -> Result<Vec<ExperimentLine>> {
+        let experiment = self.get_experiment(exp_type)?;
+
+        let mut stmt = self
+            .db
+            .prepare("select experiment_code, experiment_label from experiments where experiment_type = :type")?;
+
+        let mut vec = vec![];
+        for line in stmt.query_map(rusqlite::named_params! {":type": exp_type}, |row| {
+            Ok(ExperimentLine {
+                experiment: experiment.clone(),
+                code: row.get(0).unwrap_or("".to_string()),
+                label: row.get(1).unwrap_or("".to_string()),
+            })
+        })? {
+            vec.push(line.unwrap());
+        }
+
+        Ok(vec)
+    }
+
     pub fn experiments(&self) -> Vec<Experiment> {
         self.inner_config.experiments.clone()
     }
 
+    pub fn experiment_lines(&self) -> Result<Vec<ExperimentLine>> {
+        let mut stmt = self.db.prepare(
+            "select experiment_type, experiment_label, experiment_code from experiments",
+        )?;
+
+        let mut vec = vec![];
+        for line in stmt.query_map([], |row| {
+            let s = row.get(0).unwrap_or("".to_string());
+            let experiment = self.get_experiment(&s).unwrap();
+            Ok(ExperimentLine {
+                experiment,
+                label: row.get(1).unwrap_or("".to_string()),
+                code: row.get(2).unwrap_or("".to_string()),
+            })
+        })? {
+            vec.push(line.unwrap());
+        }
+
+        Ok(vec)
+    }
+
     pub fn status(&self) -> Result<Vec<ExperimentStatus>> {
         let mut map = HashMap::with_capacity(self.inner_config.experiments.len());
-        for exp in &self.inner_config.experiments {
-            map.insert(
-                exp.code.clone(),
-                ExperimentStatus {
-                    label: exp.label.clone(),
-                    code: exp.code.clone(),
-                    exp_type: exp.exp_type.clone(),
-                    n_datapoints: 0,
-                },
-            );
+
+        let mut stmt = self.db.prepare(
+            "select experiment_code, experiment_label, experiment_type from experiments",
+        )?;
+        for status in stmt.query_map([], |row| {
+            Ok(ExperimentStatus {
+                code: row.get(0).unwrap_or("".to_string()),
+                label: row.get(1).unwrap_or("".to_string()),
+                exp_type: row.get(2).unwrap_or("".to_string()),
+                n_datapoints: 0,
+            })
+        })? {
+            let status = status.unwrap();
+            map.insert(status.code.clone(), status);
         }
 
         let mut stmt = self
@@ -102,42 +201,37 @@ impl<'a> Config {
             .is_some()
     }
 
-    pub fn get_experiment_handle(&'a self, exp_type: &str) -> Option<ExperimentHandle<'a>> {
-        ExperimentHandle::new(
+    pub fn get_experiment_handle(&'a self, exp_type: &str) -> Result<ExperimentHandle<'a>> {
+        Ok(ExperimentHandle::new(
             &self.db,
-            self.inner_config
-                .experiments
-                .iter()
-                .filter(|e| e.exp_type == exp_type)
-                .cloned()
-                .collect::<Vec<_>>(),
-        )
+            self.get_experiment(exp_type)?,
+            self.get_experiment_lines(exp_type)?,
+        )?)
     }
 
     pub fn get_inserter_handle(&'a self, code: &str) -> Option<InserterHandle<'a>> {
-        self.inner_config
-            .experiments
-            .iter()
-            .find(|e| e.code == code)
-            .map(|e| InserterHandle::new(&self.db, e.clone()))
+        self.get_experiment_line(code)
+            .map(|exp_line| InserterHandle::new(&self.db, exp_line))
+            .ok()
     }
 }
 
 impl<'a> ExperimentHandle<'a> {
-    fn new(db: &'a rusqlite::Connection, experiments: Vec<Experiment>) -> Option<Self> {
-        if experiments.len() == 0 || !experiments.iter().all(|x| x.is_compatible(&experiments[0])) {
-            eprintln!("AAAAAAA {}", experiments.len());
-            None
+    fn new(
+        db: &'a rusqlite::Connection,
+        experiment: Experiment,
+        lines: Vec<ExperimentLine>,
+    ) -> Result<Self, BencherError> {
+        if lines.len() == 0 {
+            Err(BencherError::NoLines(experiment.exp_type))
         } else {
-            let exp_type = experiments[0].exp_type.clone();
-            let x_label = experiments[0].x_label.clone();
-            let x_units = experiments[0].x_units.clone();
-            let y_label = experiments[0].y_label.clone();
-            let y_units = experiments[0].y_units.clone();
-            Some(Self {
+            let x_label = experiment.x_label.clone();
+            let x_units = experiment.x_units.clone();
+            let y_label = experiment.y_label.clone();
+            let y_units = experiment.y_units.clone();
+            Ok(Self {
                 db,
-                experiments,
-                exp_type,
+                lines,
                 x_label,
                 x_units,
                 y_label,
@@ -189,15 +283,14 @@ impl<'a> ExperimentHandle<'a> {
                     y_int_25,   y_int_75,
                     y_float_25, y_float_75
              from results
-             where experiment_type = :exp_type and experiment_label = :exp_label",
+             where experiment_code = :code",
         )?;
 
-        let mut map = HashMap::with_capacity(self.experiments.len());
-        for exp in &self.experiments {
+        let mut map = HashMap::with_capacity(self.lines.len());
+        for exp in &self.lines {
             let mut vec = vec![];
-            for datapoint in stmt.query_map(
-                rusqlite::named_params! { ":exp_type": &self.exp_type, ":exp_label": &exp.label },
-                |row| {
+            for datapoint in
+                stmt.query_map(rusqlite::named_params! { ":code": &exp.code }, |row| {
                     let mut datapoint = Datapoint::new(
                         row.get(0).unwrap(),
                         row.get(1).unwrap(),
@@ -285,8 +378,8 @@ impl<'a> ExperimentHandle<'a> {
                         let _ = datapoint.add_y_confidence(10, e);
                     }
                     Ok(datapoint)
-                },
-            )? {
+                })?
+            {
                 vec.push(datapoint?);
             }
 
@@ -445,7 +538,7 @@ set style line {0} linecolor rgb '#{3}' linetype 2 linewidth 2.5 pointtype {2} p
 set style line {1} linecolor rgb '#{3}' linetype 2 linewidth 2.5 pointtype {2} pointsize 2",
                 2 * idx + 1,
                 2 * idx + 2,
-                idx + 4,
+                2 * idx + 4,
                 COLORS[idx % COLORS.len()]
                 )
         }
@@ -517,16 +610,17 @@ set yrange [*:*]
 }
 
 impl<'a> InserterHandle<'a> {
-    fn new(db: &'a rusqlite::Connection, experiment: Experiment) -> Self {
-        Self { db, experiment }
+    fn new(db: &'a rusqlite::Connection, experiment_line: ExperimentLine) -> Self {
+        Self {
+            db,
+            experiment_line,
+        }
     }
 
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
         let mut stmt = self.db.prepare(
             "insert into results (
                     experiment_code,
-                    experiment_type,
-                    experiment_label,
 
                     x_int,
                     x_int_1,
@@ -569,8 +663,7 @@ impl<'a> InserterHandle<'a> {
                     y_float_75
                 ) values (
                     :experiment_code,
-                    :experiment_type,
-                    :experiment_label,
+
                     :x_int,
                     :x_int_1,
                     :x_int_5,
@@ -614,9 +707,7 @@ impl<'a> InserterHandle<'a> {
         )?;
 
         stmt.execute(rusqlite::named_params! {
-            ":experiment_code": self.experiment.code,
-            ":experiment_type": self.experiment.exp_type,
-            ":experiment_label": self.experiment.label,
+            ":experiment_code": self.experiment_line.code,
 
             ":x_int": datapoint.x.to_int(),
             ":x_float": datapoint.x.to_float(),
@@ -702,10 +793,17 @@ fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
 
 fn setup_db(db: &rusqlite::Connection) -> Result<()> {
     db.execute(
+        "create table if not exists experiments (
+            experiment_code text not null primary key,
+            experiment_type text not null,
+            experiment_label text not null
+        )",
+        [],
+    )?;
+
+    db.execute(
         "create table if not exists results (
             experiment_code text not null,
-            experiment_label text not null,
-            experiment_type text not null,
 
             x_int int,
             x_int_1 int,
@@ -747,6 +845,7 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
             y_float_90 float,
             y_float_75 float,
 
+            foreing key experiment_code references experiments,
             primary key (experiment_code, x_int, x_float, y_int, y_float)
         )",
         [],
@@ -762,18 +861,14 @@ mod test {
     fn gen_experiments() -> Vec<Experiment> {
         vec![
             Experiment {
-                code: "tput_latency_xyz".to_string(),
                 exp_type: "Throughput Latency".to_string(),
-                label: "Read".to_string(),
                 x_label: "Throughput".to_string(),
                 x_units: "ops/s".to_string(),
                 y_label: "Latency".to_string(),
                 y_units: "s".to_string(),
             },
             Experiment {
-                code: "tput_xxx".to_string(),
                 exp_type: "Throughput".to_string(),
-                label: "Read".to_string(),
                 x_label: "Offered Load".to_string(),
                 x_units: "ops/s".to_string(),
                 y_label: "Throughput".to_string(),
@@ -790,17 +885,28 @@ mod test {
     }
 
     fn gen_in_memory_config() -> Config {
-        Config::from_conn_and_config(
+        let conf = Config::from_conn_and_config(
             rusqlite::Connection::open_in_memory().unwrap(),
             gen_inner_config(),
         )
-        .unwrap()
+        .unwrap();
+
+        conf.add_experiment("Throughput Latency", "Write", "tput_lat")
+            .unwrap();
+        conf.add_experiment("Throughput", "Read", "tput_1").unwrap();
+        conf.add_experiment("Throughput", "Write", "tput_2")
+            .unwrap();
+
+        conf
     }
 
-    fn populate(handle: &InserterHandle) {
+    fn populate(handle1: &InserterHandle, handle2: &InserterHandle) {
         for x in (0..=100).step_by(10) {
-            handle
+            handle1
                 .add_datapoint(Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+                .unwrap();
+            handle2
+                .add_datapoint(Datapoint::new(Some(x), None, Some(10_000 - x * x), None).unwrap())
                 .unwrap();
         }
     }
@@ -818,15 +924,21 @@ mod test {
             config.status().unwrap().into_iter().collect::<HashSet<_>>(),
             vec![
                 ExperimentStatus {
-                    code: "tput_latency_xyz".to_string(),
-                    exp_type: "Throughput Latency".to_string(),
+                    code: "tput_1".to_string(),
+                    exp_type: "Throughput".to_string(),
                     label: "Read".to_string(),
                     n_datapoints: 0
                 },
                 ExperimentStatus {
-                    code: "tput_xxx".to_string(),
+                    code: "tput_lat".to_string(),
+                    exp_type: "Throughput Latency".to_string(),
+                    label: "Write".to_string(),
+                    n_datapoints: 0
+                },
+                ExperimentStatus {
+                    code: "tput_2".to_string(),
                     exp_type: "Throughput".to_string(),
-                    label: "Read".to_string(),
+                    label: "Write".to_string(),
                     n_datapoints: 0
                 },
             ]
@@ -839,48 +951,55 @@ mod test {
     fn config_get_handle() {
         let config = gen_in_memory_config();
         assert_eq!(config.has_experiment("Latency"), false);
-        assert!(config.get_experiment_handle("Latency").is_none());
+        assert!(config.get_experiment_handle("Latency").is_err());
         assert_eq!(config.has_experiment("Throughput"), true);
-        assert!(config.get_experiment_handle("Throughput").is_some());
+        assert!(config.get_experiment_handle("Throughput").is_ok());
     }
 
     #[test]
     fn can_populate() {
-        let config = Config::new().unwrap();
-        let handle = config.get_inserter_handle("tput_xxx").unwrap();
-        populate(&handle);
+        let config = gen_in_memory_config();
+        let handle1 = config.get_inserter_handle("tput_1").unwrap();
+        let handle2 = config.get_inserter_handle("tput_2").unwrap();
+        populate(&handle1, &handle2);
     }
 
     #[test]
     fn can_get() {
         let config = gen_in_memory_config();
-        let inserter_handle = config.get_inserter_handle("tput_xxx").unwrap();
-        populate(&inserter_handle);
+        let handle1 = config.get_inserter_handle("tput_1").unwrap();
+        let handle2 = config.get_inserter_handle("tput_2").unwrap();
+        populate(&handle1, &handle2);
 
         let handle = config.get_experiment_handle("Throughput").unwrap();
 
-        assert_eq!(
-            handle
-                .get_datapoints()
-                .unwrap()
-                .values()
-                .find(|_| true)
-                .unwrap(),
-            &(0..=100)
-                .step_by(10)
-                .into_iter()
-                .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
-                .collect::<Vec<Datapoint>>()
-        );
+        let v1 = (0..=100)
+            .step_by(10)
+            .into_iter()
+            .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+            .collect::<Vec<Datapoint>>();
+        let v2 = (0..=100)
+            .step_by(10)
+            .into_iter()
+            .map(|x| Datapoint::new(Some(x), None, Some(10_000 - x * x), None).unwrap())
+            .collect::<Vec<Datapoint>>();
+
+        let datapoints = handle
+            .get_datapoints()
+            .unwrap()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert_eq!(datapoints.len(), 2);
+        assert!(datapoints[0] == v1 || datapoints[0] == v2);
+        assert!(datapoints[1] == v1 || datapoints[1] == v2);
+
         let (datapoints, x_mag, y_mag) = handle.get_datapoints_magnitudes().unwrap();
-        assert_eq!(
-            datapoints.values().find(|_| true).unwrap(),
-            &(0..=100)
-                .step_by(10)
-                .into_iter()
-                .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
-                .collect::<Vec<Datapoint>>()
-        );
+        let datapoints = datapoints.values().cloned().collect::<Vec<_>>();
+        assert_eq!(datapoints.len(), 2);
+        assert!(datapoints[0] == v1 || datapoints[0] == v2);
+        assert!(datapoints[1] == v1 || datapoints[1] == v2);
         assert_eq!(x_mag, Magnitude::Normal);
         assert_eq!(y_mag, Magnitude::Kilo);
     }

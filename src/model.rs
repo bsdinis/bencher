@@ -229,7 +229,9 @@ impl Datapoint {
 
 #[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug)]
 pub struct Experiment {
+    pub code: String,
     pub label: String,
+    pub exp_type: String,
     pub x_label: String,
     pub x_units: String,
     pub y_label: String,
@@ -238,7 +240,9 @@ pub struct Experiment {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ExperimentStatus {
+    pub code: String,
     pub label: String,
+    pub exp_type: String,
     pub n_datapoints: usize,
 }
 
@@ -251,6 +255,7 @@ pub struct BencherConfig {
     pub experiments: Vec<Experiment>,
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
 

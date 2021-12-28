@@ -1,6 +1,6 @@
 use bencher::{BencherError, Config};
 use clap::{App, Arg, ArgMatches, SubCommand};
-use cli_table::{format::Justify, Cell, Style, Table, TableStruct};
+use cli_table::{format::Justify, Cell, Style, Table};
 use eyre::Result;
 
 fn main() -> Result<()> {
@@ -106,6 +106,8 @@ fn list(config: &Config) -> Result<()> {
         .into_iter()
         .map(|e| {
             vec![
+                e.code.cell().justify(Justify::Center).bold(true),
+                e.exp_type.cell().justify(Justify::Center).bold(true),
                 e.label.cell().justify(Justify::Center).bold(true),
                 e.x_label.cell().justify(Justify::Center),
                 e.x_units.cell().justify(Justify::Center),
@@ -116,6 +118,8 @@ fn list(config: &Config) -> Result<()> {
         .collect::<Vec<_>>()
         .table()
         .title(vec![
+            "Code".cell().justify(Justify::Center).bold(true),
+            "Type".cell().justify(Justify::Center).bold(true),
             "Label".cell().justify(Justify::Center).bold(true),
             "x label".cell().justify(Justify::Center).bold(true),
             "x units".cell().justify(Justify::Center).bold(true),
@@ -134,6 +138,8 @@ fn status(config: &Config) -> Result<()> {
         .into_iter()
         .map(|s| {
             vec![
+                s.code.cell().justify(Justify::Center).bold(true),
+                s.exp_type.cell().justify(Justify::Center).bold(true),
                 s.label.cell().justify(Justify::Center).bold(true),
                 s.n_datapoints.cell().justify(Justify::Right),
             ]
@@ -141,6 +147,8 @@ fn status(config: &Config) -> Result<()> {
         .collect::<Vec<_>>()
         .table()
         .title(vec![
+            "Code".cell().justify(Justify::Center).bold(true),
+            "Type".cell().justify(Justify::Center).bold(true),
             "Label".cell().justify(Justify::Center).bold(true),
             "#Datapoints".cell().justify(Justify::Center).bold(true),
         ])

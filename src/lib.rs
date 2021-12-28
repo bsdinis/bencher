@@ -1,8 +1,7 @@
-use cli_table::{format::Justify, Cell, Style, Table, TableStruct};
+use cli_table::{format::Justify, Cell, Style, Table};
 use either::Either;
 use eyre::Result;
-use std::collections::{HashMap, HashSet};
-use std::fmt::Write;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -50,11 +49,11 @@ impl<'a> Config {
         Ok(Self { db, inner_config })
     }
 
-    pub fn has_experiment(&self, label: &str) -> bool {
+    pub fn has_experiment(&self, code: &str) -> bool {
         self.inner_config
             .experiments
             .iter()
-            .find(|e| e.label == label)
+            .find(|e| e.code == code)
             .is_some()
     }
 
@@ -66,9 +65,11 @@ impl<'a> Config {
         let mut map = HashMap::with_capacity(self.inner_config.experiments.len());
         for exp in &self.inner_config.experiments {
             map.insert(
-                exp.label.clone(),
+                exp.code.clone(),
                 ExperimentStatus {
                     label: exp.label.clone(),
+                    code: exp.code.clone(),
+                    exp_type: exp.exp_type.clone(),
                     n_datapoints: 0,
                 },
             );
@@ -76,27 +77,25 @@ impl<'a> Config {
 
         let mut stmt = self
             .db
-            .prepare("select experiment_label, count(*) from results group by experiment_label")?;
+            .prepare("select experiment_code, count(*) from results group by experiment_code")?;
         for status in stmt.query_map([], |row| {
-            Ok(ExperimentStatus {
-                label: row.get(0).unwrap_or("".to_string()),
-                n_datapoints: row.get(1).unwrap_or(0),
-            })
+            Ok((
+                row.get(0).unwrap_or("".to_string()),
+                row.get(1).unwrap_or(0),
+            ))
         })? {
-            let status = status.unwrap();
-            let n_datapoints = status.n_datapoints;
-            let entry = map.entry(status.label.clone()).or_insert(status);
-            entry.n_datapoints = n_datapoints;
+            let (code, n_datapoints) = status.unwrap();
+            map.get_mut(&code).map(|s| s.n_datapoints = n_datapoints);
         }
 
         Ok(map.into_iter().map(|(_, v)| v).collect())
     }
 
-    pub fn get_experiment_handle(&'a self, label: &str) -> Option<ExperimentHandle<'a>> {
+    pub fn get_experiment_handle(&'a self, code: &str) -> Option<ExperimentHandle<'a>> {
         self.inner_config
             .experiments
             .iter()
-            .find(|e| e.label == label)
+            .find(|e| e.code == code)
             .map(|e| ExperimentHandle::new(&self.db, e.clone()))
     }
 }
@@ -149,12 +148,12 @@ impl<'a> ExperimentHandle<'a> {
                     y_int_25,   y_int_75,
                     y_float_25, y_float_75
              from results
-             where experiment_label = :label",
+             where experiment_code = :code",
         )?;
 
         let mut vec = vec![];
         for datapoint in stmt.query_map(
-            rusqlite::named_params! { ":label": &self.experiment.label },
+            rusqlite::named_params! { ":code": &self.experiment.code },
             |row| {
                 let mut datapoint = Datapoint::new(
                     row.get(0).unwrap(),
@@ -441,7 +440,10 @@ plot 'TODO.dat' title '{}' with lp linestyle 1
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
         let mut stmt = self.db.prepare(
             "insert into results (
+                    experiment_code,
+                    experiment_type,
                     experiment_label,
+
                     x_int,
                     x_int_1,
                     x_int_5,
@@ -482,6 +484,8 @@ plot 'TODO.dat' title '{}' with lp linestyle 1
                     y_float_90,
                     y_float_75
                 ) values (
+                    :experiment_code,
+                    :experiment_type,
                     :experiment_label,
                     :x_int,
                     :x_int_1,
@@ -526,7 +530,10 @@ plot 'TODO.dat' title '{}' with lp linestyle 1
         )?;
 
         stmt.execute(rusqlite::named_params! {
+            ":experiment_code": self.experiment.code,
+            ":experiment_type": self.experiment.exp_type,
             ":experiment_label": self.experiment.label,
+
             ":x_int": datapoint.x.to_int(),
             ":x_float": datapoint.x.to_float(),
             ":y_int": datapoint.y.to_int(),
@@ -612,7 +619,9 @@ fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
 fn setup_db(db: &rusqlite::Connection) -> Result<()> {
     db.execute(
         "create table if not exists results (
+            experiment_code text not null,
             experiment_label text not null,
+            experiment_type text not null,
 
             x_int int,
             x_int_1 int,
@@ -654,27 +663,33 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
             y_float_90 float,
             y_float_75 float,
 
-            primary key (experiment_label, x_int, x_float, y_int, y_float)
+            primary key (experiment_code, x_int, x_float, y_int, y_float)
         )",
         [],
     )?;
     Ok(())
 }
 
+#[cfg(test)]
 mod test {
     use super::*;
+    use std::collections::HashSet;
 
     fn gen_experiments() -> Vec<Experiment> {
         vec![
             Experiment {
-                label: "Throughput Latency".to_string(),
+                code: "tput_latency_xyz".to_string(),
+                exp_type: "Throughput Latency".to_string(),
+                label: "Read".to_string(),
                 x_label: "Throughput".to_string(),
                 x_units: "ops/s".to_string(),
                 y_label: "Latency".to_string(),
                 y_units: "s".to_string(),
             },
             Experiment {
-                label: "Throughput".to_string(),
+                code: "tput_xxx".to_string(),
+                exp_type: "Throughput".to_string(),
+                label: "Read".to_string(),
                 x_label: "Offered Load".to_string(),
                 x_units: "ops/s".to_string(),
                 y_label: "Throughput".to_string(),
@@ -719,11 +734,15 @@ mod test {
             config.status().unwrap().into_iter().collect::<HashSet<_>>(),
             vec![
                 ExperimentStatus {
-                    label: "Throughput".to_string(),
+                    code: "tput_latency_xyz".to_string(),
+                    exp_type: "Throughput Latency".to_string(),
+                    label: "Read".to_string(),
                     n_datapoints: 0
                 },
                 ExperimentStatus {
-                    label: "Throughput Latency".to_string(),
+                    code: "tput_xxx".to_string(),
+                    exp_type: "Throughput".to_string(),
+                    label: "Read".to_string(),
                     n_datapoints: 0
                 },
             ]
@@ -737,21 +756,21 @@ mod test {
         let config = gen_in_memory_config();
         assert!(config.get_experiment_handle("Latency").is_none());
         assert_eq!(config.has_experiment("Latency"), false);
-        assert!(config.get_experiment_handle("Throughput").is_some());
-        assert_eq!(config.has_experiment("Throughput"), true);
+        assert!(config.get_experiment_handle("tput_xxx").is_some());
+        assert_eq!(config.has_experiment("tput_xxx"), true);
     }
 
     #[test]
     fn can_populate() {
-        let config = gen_in_memory_config();
-        let handle = config.get_experiment_handle("Throughput").unwrap();
+        let config = Config::new().unwrap();
+        let handle = config.get_experiment_handle("tput_xxx").unwrap();
         populate(&handle);
     }
 
     #[test]
     fn can_get() {
         let config = gen_in_memory_config();
-        let handle = config.get_experiment_handle("Throughput").unwrap();
+        let handle = config.get_experiment_handle("tput_xxx").unwrap();
         populate(&handle);
 
         assert_eq!(

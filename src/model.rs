@@ -91,7 +91,7 @@ impl Value {
                 1_000_000..=999_999_999 => Magnitude::Mega,
                 _ => Magnitude::Giga,
             },
-            Value::Float(f) => match *f {
+            Value::Float(f) => match f.abs() {
                 x if x == 0.0_f64 => Magnitude::Normal,
                 x if x < 1e-6_f64 => Magnitude::Nano,
                 x if x >= 1e-6_f64 && x < 1e-3_f64 => Magnitude::Micro,
@@ -137,6 +137,8 @@ pub struct Datapoint {
     pub y: Value,
 
     pub y_confidence: HashMap<Confidence, (Value, Value)>,
+
+    pub tag: Option<isize>,
 }
 
 impl Datapoint {
@@ -161,7 +163,13 @@ impl Datapoint {
             y,
             x_confidence: HashMap::new(),
             y_confidence: HashMap::new(),
+            tag: None,
         })
+    }
+
+    pub fn tag(mut self, tag: isize) -> Self {
+        self.tag = Some(tag);
+        self
     }
 
     pub fn magnitudes(&self) -> (Magnitude, Magnitude) {
@@ -332,6 +340,15 @@ mod test {
         assert_eq!(Value::Float(0.000001_f64).magnitude(), Magnitude::Micro);
         assert_eq!(Value::Float(0.0000001_f64).magnitude(), Magnitude::Nano);
         assert_eq!(Value::Float(0.000000001_f64).magnitude(), Magnitude::Nano);
+
+        assert_eq!(Value::Float(-1e+6_f64).magnitude(), Magnitude::Mega);
+        assert_eq!(Value::Float(-9e+10_f64).magnitude(), Magnitude::Giga);
+        assert_eq!(Value::Float(-0.1_f64).magnitude(), Magnitude::Mili);
+        assert_eq!(Value::Float(-0.000000001_f64).magnitude(), Magnitude::Nano);
+
+        assert_eq!(Value::Int(-1_000).magnitude(), Magnitude::Kilo);
+        assert_eq!(Value::Int(-1_000_000).magnitude(), Magnitude::Mega);
+        assert_eq!(Value::Int(-1_000_000_000).magnitude(), Magnitude::Giga);
     }
 
     #[test]
@@ -348,6 +365,21 @@ mod test {
         assert!(Datapoint::new(Some(0), Some(0.0), Some(0), None).is_ok());
         assert!(Datapoint::new(Some(0), None, Some(0), Some(0.0)).is_ok());
         assert!(Datapoint::new(Some(0), Some(0.0), Some(0), Some(0.0)).is_ok());
+    }
+
+    #[test]
+    fn datapoint_tag() {
+        assert_eq!(
+            Datapoint::new(Some(0), None, Some(0), None).unwrap().tag,
+            None
+        );
+        assert_eq!(
+            Datapoint::new(Some(0), None, Some(0), None)
+                .unwrap()
+                .tag(42)
+                .tag,
+            Some(42)
+        );
     }
 
     #[test]

@@ -281,7 +281,9 @@ impl<'a> ExperimentHandle<'a> {
                     y_float_10, y_float_90,
 
                     y_int_25,   y_int_75,
-                    y_float_25, y_float_75
+                    y_float_25, y_float_75,
+
+                    tag
              from results
              where experiment_code = :code",
         )?;
@@ -377,12 +379,18 @@ impl<'a> ExperimentHandle<'a> {
                     ) {
                         let _ = datapoint.add_y_confidence(10, e);
                     }
-                    Ok(datapoint)
+
+                    Ok(if let Some(tag) = row.get(36).unwrap() {
+                        datapoint.tag(tag)
+                    } else {
+                        datapoint
+                    })
                 })?
             {
                 vec.push(datapoint?);
             }
 
+            vec.sort_by_key(|d| d.tag);
             map.insert(exp.label.clone(), vec);
         }
 
@@ -617,10 +625,26 @@ impl<'a> InserterHandle<'a> {
         }
     }
 
+    fn tag_datapoint(&self, datapoint: Datapoint) -> Result<Datapoint> {
+        if datapoint.tag.is_some() {
+            return Ok(datapoint);
+        }
+
+        let new_tag = self.db.query_row(
+            "select experiment_code, max(tag) + 1 from results where experiment_code = :code",
+            rusqlite::named_params! { ":code": self.experiment_line.code },
+            |row| Ok(row.get(1).unwrap_or(0)),
+        )?;
+
+        Ok(datapoint.tag(new_tag))
+    }
+
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
+        let datapoint = self.tag_datapoint(datapoint)?;
         let mut stmt = self.db.prepare(
             "insert into results (
                     experiment_code,
+                    tag,
 
                     x_int,
                     x_int_1,
@@ -663,6 +687,7 @@ impl<'a> InserterHandle<'a> {
                     y_float_75
                 ) values (
                     :experiment_code,
+                    :tag,
 
                     :x_int,
                     :x_int_1,
@@ -708,6 +733,7 @@ impl<'a> InserterHandle<'a> {
 
         stmt.execute(rusqlite::named_params! {
             ":experiment_code": self.experiment_line.code,
+            ":tag": datapoint.tag.unwrap(),
 
             ":x_int": datapoint.x.to_int(),
             ":x_float": datapoint.x.to_float(),
@@ -804,6 +830,7 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
     db.execute(
         "create table if not exists results (
             experiment_code text not null,
+            tag int not null,
 
             x_int int,
             x_int_1 int,
@@ -846,7 +873,7 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
             y_float_75 float,
 
             foreing key experiment_code references experiments,
-            primary key (experiment_code, x_int, x_float, y_int, y_float)
+            primary key (experiment_code, tag)
         )",
         [],
     )?;
@@ -902,11 +929,12 @@ mod test {
 
     fn populate(handle1: &InserterHandle, handle2: &InserterHandle) {
         for x in (0..=100).step_by(10) {
+            let y = 100 - x;
             handle1
                 .add_datapoint(Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
                 .unwrap();
             handle2
-                .add_datapoint(Datapoint::new(Some(x), None, Some(10_000 - x * x), None).unwrap())
+                .add_datapoint(Datapoint::new(Some(y), None, Some(10_000 - y * y), None).unwrap())
                 .unwrap();
         }
     }
@@ -973,16 +1001,28 @@ mod test {
 
         let handle = config.get_experiment_handle("Throughput").unwrap();
 
-        let v1 = (0..=100)
+        let mut v1 = (0..=100)
             .step_by(10)
             .into_iter()
-            .map(|x| Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+            .map(|x| {
+                Datapoint::new(Some(x), None, Some(x * x), None)
+                    .unwrap()
+                    .tag(x as isize / 10)
+            })
             .collect::<Vec<Datapoint>>();
-        let v2 = (0..=100)
+        let mut v2 = (0..=100)
             .step_by(10)
             .into_iter()
-            .map(|x| Datapoint::new(Some(x), None, Some(10_000 - x * x), None).unwrap())
+            .map(|x| 100 - x)
+            .map(|x| {
+                Datapoint::new(Some(x), None, Some(10_000 - x * x), None)
+                    .unwrap()
+                    .tag((100 - x) as isize / 10)
+            })
             .collect::<Vec<Datapoint>>();
+
+        v1.sort_by_key(|x| x.tag);
+        v2.sort_by_key(|x| x.tag);
 
         let datapoints = handle
             .get_datapoints()

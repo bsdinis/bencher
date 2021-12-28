@@ -2,6 +2,7 @@ use cli_table::{format::Justify, Cell, Style, Table, TableStruct};
 use either::Either;
 use eyre::Result;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -47,6 +48,14 @@ impl<'a> Config {
     ) -> Result<Self> {
         setup_db(&db)?;
         Ok(Self { db, inner_config })
+    }
+
+    pub fn has_experiment(&self, label: &str) -> bool {
+        self.inner_config
+            .experiments
+            .iter()
+            .find(|e| e.label == label)
+            .is_some()
     }
 
     pub fn experiments(&self) -> Vec<Experiment> {
@@ -303,10 +312,10 @@ impl<'a> ExperimentHandle<'a> {
         Ok((datapoints, x_mag, y_mag))
     }
 
-    pub fn get_table(&self) -> Result<TableStruct> {
+    pub fn dump_table(&self) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
-        Ok(datapoints
+        let table = datapoints
             .into_iter()
             .map(|d| {
                 vec![
@@ -340,16 +349,17 @@ impl<'a> ExperimentHandle<'a> {
                 .justify(Justify::Center)
                 .bold(true),
             ])
-            .bold(true))
+            .bold(true);
+
+        cli_table::print_stdout(table)?;
+        Ok(())
     }
 
-    pub fn get_latex_table(&self) -> Result<String> {
+    pub fn dump_latex_table(&self) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
-        let mut table =
-            "\\begin{table}[t]\n\t\\centering\n\t\\begin{tabular}{|r|r|}\n\t\t\\hline\n"
-                .to_string();
-        table += &format!(
-            "\t\t\\textbf{{ {} ({}{}) }} & \\textbf{{ {} ({}{}) }} \\\\ \\hline\n",
+        println!("\\begin{{table}}[t]\n    \\centering\n    \\begin{{tabular}}{{|r|r|}}\n        \\hline");
+        println!(
+            "        \\textbf{{ {} ({}{}) }} & \\textbf{{ {} ({}{}) }} \\\\ \\hline",
             self.experiment.x_label,
             x_mag.prefix(),
             self.experiment.x_units,
@@ -358,25 +368,27 @@ impl<'a> ExperimentHandle<'a> {
             self.experiment.y_units
         );
         for d in datapoints {
-            table += &format!(
-                "\t\t${:>8}$ & ${:>8}$ \\\\ \\hline\n",
+            println!(
+                "        ${:>8}$ & ${:>8}$ \\\\ \\hline",
                 d.x.display_with_magnitude(x_mag),
                 d.y.display_with_magnitude(y_mag)
             )
         }
-        table += "\t\\end{tabular}\n\t\\caption{Caption}\\label{table:label}\\end{table}";
-        Ok(table)
+        println!(
+            "    \\end{{tabular}}\n    \\caption{{Caption}}\\label{{table:label}}\n\\end{{table}}"
+        );
+        Ok(())
     }
 
-    pub fn get_gnuplot(&self) -> Result<String> {
+    pub fn dump_gnuplot(&self) -> Result<()> {
         todo!()
     }
 
-    pub fn get_dat(&self) -> Result<String> {
+    pub fn dump_dat(&self) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
-        let mut dat = format!(
-            "# x axis: {} ({}{})\n# y axis: {} ({}{})\n\n",
+        println!(
+            "# x axis: {} ({}{})\n# y axis: {} ({}{})\n",
             self.experiment.x_label,
             x_mag.prefix(),
             self.experiment.x_units,
@@ -385,14 +397,14 @@ impl<'a> ExperimentHandle<'a> {
             self.experiment.y_units
         );
         for d in datapoints {
-            dat += &format!(
-                "{:>8} {:>8}\n",
+            println!(
+                "{:>8} {:>8}",
                 d.x.display_with_magnitude(x_mag),
                 d.y.display_with_magnitude(y_mag)
             );
         }
-        dat += "# end";
-        Ok(dat)
+        println!("# end");
+        Ok(())
     }
 
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
@@ -693,7 +705,9 @@ mod test {
     fn config_get_handle() {
         let config = gen_in_memory_config();
         assert!(config.get_experiment_handle("Latency").is_none());
+        assert_eq!(config.has_experiment("Latency"), false);
         assert!(config.get_experiment_handle("Throughput").is_some());
+        assert_eq!(config.has_experiment("Throughput"), true);
     }
 
     #[test]

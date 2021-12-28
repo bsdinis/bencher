@@ -23,6 +23,12 @@ pub enum BencherError {
 
     #[error("Point type and error bar type do not match")]
     MismatchedTypes,
+
+    #[error("No experiment provided. Available experiments: {0}")]
+    MissingExperiment(String),
+
+    #[error("Experiment `{0}` not found. Available experiments: {1}")]
+    ExperimentNotFound(String, String),
 }
 
 impl From<BencherError> for rusqlite::Error {

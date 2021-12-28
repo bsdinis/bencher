@@ -5,13 +5,15 @@ authors = ["bsdinis <baltasar.dinis@tecnico.ulisboa.pt>"]
 edition = "2018"
 
 [dependencies]
-eyre = "0.6"
-thiserror = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+clap = "2.34"
 cli-table = "0.4"
-rusqlite = { version = "0.26", features = ["vtab"] }
+color-eyre = "0.5"
 either = "1.6"
+eyre = "0.6"
+rusqlite = { version = "0.26", features = ["vtab"] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
 
 [lib]
 name = "bencher"

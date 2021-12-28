@@ -2,3 +2,7 @@
 Cargo.lock
 .bencher-config
 *.sqlite
+*.dat
+*.gnu
+*.png
+*.eps

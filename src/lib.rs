@@ -381,7 +381,38 @@ impl<'a> ExperimentHandle<'a> {
     }
 
     pub fn dump_gnuplot(&self) -> Result<()> {
-        todo!()
+        let (_, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
+        println!(
+            "reset
+
+set terminal postscript eps colour size 12cm,8cm enhanced font 'Helvetica,20'
+set output 'TODO.eps'
+
+set border linewidth 0.75
+set key outside above
+
+# Set color of linestyle 1 to #8b0000
+set style line 1 linecolor rgb '#8b0000' linetype 2 linewidth 2.5 pointtype 4 pointsize 2 dashtype 2
+# Set yerror color of linestyle 2 to #8b0000
+set style line 2 linecolor rgb '#8b0000' linetype 2 linewidth 2.5 pointtype 4 pointsize 2
+
+# set axis
+set tics scale 0.75
+set xlabel '{} ({}{})'
+set ylabel '{} ({}{})'
+set xrange [*:*]
+set yrange [*:*]
+plot 'TODO.dat' title '{}' with lp linestyle 1
+",
+            self.experiment.x_label,
+            x_mag.prefix(),
+            self.experiment.x_units,
+            self.experiment.y_label,
+            y_mag.prefix(),
+            self.experiment.y_units,
+            self.experiment.label
+        );
+        Ok(())
     }
 
     pub fn dump_dat(&self) -> Result<()> {

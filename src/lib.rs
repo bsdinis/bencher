@@ -639,6 +639,10 @@ impl<'a> InserterHandle<'a> {
         Ok(datapoint.tag(new_tag))
     }
 
+    pub fn label(&'a self) -> &'a str {
+        self.experiment_line.label.as_ref()
+    }
+
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
         let datapoint = self.tag_datapoint(datapoint)?;
         let mut stmt = self.db.prepare(

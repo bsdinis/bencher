@@ -18,25 +18,10 @@ fn main() -> Result<()> {
         .version("0.1")
         .author("Baltasar D. <baltasar.dinis@tecnico.ulisboa.pt>")
         .about("Manage benchmark results")
-        .subcommand(
-            SubCommand::with_name("list")
-                .about("list the available experiments")
-                .arg(
-                    Arg::with_name("experiment_type")
-                        .help("the experiment to use")
-                        .required(true)
-                        .possible_values(&available_experiments),
-                ),
-        )
+        .subcommand(SubCommand::with_name("list").about("list the available experiments"))
         .subcommand(
             SubCommand::with_name("status")
-                .about("queries the database to see how many datapoints we have per test label")
-                .arg(
-                    Arg::with_name("experiment_type")
-                        .help("the experiment to use")
-                        .required(true)
-                        .possible_values(&available_experiments),
-                ),
+                .about("queries the database to see how many datapoints we have per test label"),
         )
         .subcommand(
             SubCommand::with_name("table")

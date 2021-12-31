@@ -161,7 +161,7 @@ fn main() -> Result<()> {
         }
         ("versions", Some(matches)) => {
             let handle = config
-                .get_inserter_handle(matches.value_of("experiment_code").unwrap())
+                .get_line_handle(matches.value_of("experiment_code").unwrap())
                 .ok_or_else(|| {
                     eyre::eyre!(
                         "could not find experiment {}",
@@ -187,7 +187,7 @@ fn main() -> Result<()> {
             )
         }
         ("revert", Some(matches)) => config
-            .get_inserter_handle(matches.value_of("experiment_code").unwrap())
+            .get_line_handle(matches.value_of("experiment_code").unwrap())
             .ok_or_else(|| {
                 eyre::eyre!(
                     "could not find experiment {}",

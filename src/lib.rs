@@ -29,7 +29,7 @@ pub struct ExperimentHandle<'a> {
     y_units: String,
 }
 
-pub struct InserterHandle<'a> {
+pub struct LineHandle<'a> {
     db: &'a rusqlite::Connection,
     experiment_line: ExperimentLine,
 }
@@ -218,9 +218,9 @@ impl<'a> Config {
         )?)
     }
 
-    pub fn get_inserter_handle(&'a self, code: &str) -> Option<InserterHandle<'a>> {
+    pub fn get_line_handle(&'a self, code: &str) -> Option<LineHandle<'a>> {
         self.get_experiment_line(code)
-            .map(|exp_line| InserterHandle::new(&self.db, exp_line))
+            .map(|exp_line| LineHandle::new(&self.db, exp_line))
             .ok()
     }
 }
@@ -630,7 +630,7 @@ set yrange [*:*]
     }
 }
 
-impl<'a> InserterHandle<'a> {
+impl<'a> LineHandle<'a> {
     fn new(db: &'a rusqlite::Connection, experiment_line: ExperimentLine) -> Self {
         Self {
             db,
@@ -991,7 +991,7 @@ mod test {
         conf
     }
 
-    fn populate(handle1: &InserterHandle, handle2: &InserterHandle) {
+    fn populate(handle1: &LineHandle, handle2: &LineHandle) {
         for x in (0..=100).step_by(10) {
             let y = 100 - x;
             handle1
@@ -1061,16 +1061,16 @@ mod test {
     #[test]
     fn can_populate() {
         let config = gen_in_memory_config();
-        let handle1 = config.get_inserter_handle("tput_1").unwrap();
-        let handle2 = config.get_inserter_handle("tput_2").unwrap();
+        let handle1 = config.get_line_handle("tput_1").unwrap();
+        let handle2 = config.get_line_handle("tput_2").unwrap();
         populate(&handle1, &handle2);
     }
 
     #[test]
     fn can_get() {
         let config = gen_in_memory_config();
-        let handle1 = config.get_inserter_handle("tput_1").unwrap();
-        let handle2 = config.get_inserter_handle("tput_2").unwrap();
+        let handle1 = config.get_line_handle("tput_1").unwrap();
+        let handle2 = config.get_line_handle("tput_2").unwrap();
         populate(&handle1, &handle2);
 
         let handle = config.get_experiment_handle("Throughput").unwrap();
@@ -1132,7 +1132,7 @@ mod test {
 
         let config = gen_in_memory_config();
 
-        let handle = config.get_inserter_handle("tput_version").unwrap();
+        let handle = config.get_line_handle("tput_version").unwrap();
         let get_handle = config.get_experiment_handle("Throughput").unwrap();
 
         assert!(handle.version(42).is_err());

@@ -256,6 +256,7 @@ pub struct ExperimentStatus {
     pub label: String,
     pub exp_type: String,
     pub n_datapoints: usize,
+    pub n_active_datapoints: usize,
 }
 
 #[derive(serde::Deserialize)]

@@ -171,6 +171,7 @@ impl<'a> Config {
                 label: row.get(1).unwrap_or("".to_string()),
                 exp_type: row.get(2).unwrap_or("".to_string()),
                 n_datapoints: 0,
+                n_active_datapoints: 0,
             })
         })? {
             let status = status.unwrap();
@@ -188,6 +189,14 @@ impl<'a> Config {
         })? {
             let (code, n_datapoints) = status.unwrap();
             map.get_mut(&code).map(|s| s.n_datapoints = n_datapoints);
+        }
+
+        let mut stmt = self
+            .db
+            .prepare("select experiment_code, tag, max(version) from results")?;
+        for code in stmt.query_map([], |row| Ok(row.get(0).unwrap_or("".to_string())))? {
+            map.get_mut(&code.unwrap())
+                .map(|s| s.n_active_datapoints += 1);
         }
 
         Ok(map.into_iter().map(|(_, v)| v).collect())
@@ -283,9 +292,11 @@ impl<'a> ExperimentHandle<'a> {
                     y_int_25,   y_int_75,
                     y_float_25, y_float_75,
 
-                    tag
+                    tag, max(version)
              from results
-             where experiment_code = :code",
+             where experiment_code = :code
+             group by tag
+             ",
         )?;
 
         let mut map = HashMap::with_capacity(self.lines.len());
@@ -470,6 +481,7 @@ impl<'a> ExperimentHandle<'a> {
                 .into_iter()
                 .map(|d| {
                     vec![
+                        d.tag.unwrap().cell().justify(Justify::Right),
                         d.x.display_with_magnitude(x_mag)
                             .cell()
                             .justify(Justify::Right),
@@ -481,6 +493,7 @@ impl<'a> ExperimentHandle<'a> {
                 .collect::<Vec<_>>()
                 .table()
                 .title(vec![
+                    "Tag".cell().justify(Justify::Center).bold(true),
                     format!("{} ({}{})", self.x_label, x_mag.prefix(), self.x_units)
                         .cell()
                         .justify(Justify::Center)
@@ -625,18 +638,24 @@ impl<'a> InserterHandle<'a> {
         }
     }
 
-    fn tag_datapoint(&self, datapoint: Datapoint) -> Result<Datapoint> {
+    fn tag_datapoint(&self, datapoint: Datapoint) -> Result<(Datapoint, isize)> {
         if datapoint.tag.is_some() {
-            return Ok(datapoint);
+            let new_version = self.db.query_row(
+                    "select max(abs(version)) + 1 from results where experiment_code = :code and tag = :tag",
+                rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": datapoint.tag.unwrap() },
+                |row| Ok(row.get(0).unwrap_or(1)),
+            )?;
+
+            return Ok((datapoint, new_version));
         }
 
         let new_tag = self.db.query_row(
-            "select experiment_code, max(tag) + 1 from results where experiment_code = :code",
+            "select max(tag) + 1 from results where experiment_code = :code",
             rusqlite::named_params! { ":code": self.experiment_line.code },
-            |row| Ok(row.get(1).unwrap_or(0)),
+            |row| Ok(row.get(0).unwrap_or(0)),
         )?;
 
-        Ok(datapoint.tag(new_tag))
+        Ok((datapoint.tag(new_tag), 0))
     }
 
     pub fn label(&'a self) -> &'a str {
@@ -644,11 +663,12 @@ impl<'a> InserterHandle<'a> {
     }
 
     pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
-        let datapoint = self.tag_datapoint(datapoint)?;
+        let (datapoint, version) = self.tag_datapoint(datapoint)?;
         let mut stmt = self.db.prepare(
             "insert into results (
                     experiment_code,
                     tag,
+                    version,
 
                     x_int,
                     x_int_1,
@@ -692,6 +712,7 @@ impl<'a> InserterHandle<'a> {
                 ) values (
                     :experiment_code,
                     :tag,
+                    :version,
 
                     :x_int,
                     :x_int_1,
@@ -738,6 +759,7 @@ impl<'a> InserterHandle<'a> {
         stmt.execute(rusqlite::named_params! {
             ":experiment_code": self.experiment_line.code,
             ":tag": datapoint.tag.unwrap(),
+            ":version": version,
 
             ":x_int": datapoint.x.to_int(),
             ":x_float": datapoint.x.to_float(),
@@ -794,6 +816,41 @@ impl<'a> InserterHandle<'a> {
         })?;
         Ok(())
     }
+
+    pub fn version(&self, tag: isize) -> Result<usize> {
+        Ok(self.db.query_row(
+            "select max(version) from results where experiment_code = :code and tag = :tag",
+            rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag },
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn versions(&self, tag: isize) -> Result<Vec<usize>> {
+        let mut stmt = self.db.prepare(
+            "select abs(version) from results where experiment_code = :code and tag = :tag",
+        )?;
+
+        let result = stmt.query_map(
+            rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag },
+            |row| Ok(row.get(0).unwrap_or(0)),
+        )?;
+
+        Ok(result.into_iter().map(|x| x.unwrap()).collect())
+    }
+
+    pub fn revert(&self, tag: isize, version: Option<usize>) -> Result<()> {
+        if let Some(v) = version {
+            self.db.execute("update results set version = abs(version) where experiment_code = :code and tag = :tag and abs(version) = :version",
+                            rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag, ":version": v})?;
+            self.db.execute("update results set version = -version where experiment_code = :code and tag = :tag and version > :version",
+                            rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag, ":version": v})?;
+        } else {
+            self.db.execute("update results set version = -version where experiment_code = :code and tag = :tag and version in
+                            (select max(version) from results where experiment_code = :code and tag = :tag)",
+                            rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag })?;
+        }
+        Ok(())
+    }
 }
 
 fn find_config_dir() -> Result<PathBuf> {
@@ -835,6 +892,7 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
         "create table if not exists results (
             experiment_code text not null,
             tag int not null,
+            version int not null,
 
             x_int int,
             x_int_1 int,
@@ -877,7 +935,7 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
             y_float_75 float,
 
             foreing key experiment_code references experiments,
-            primary key (experiment_code, tag)
+            primary key (experiment_code, tag, version)
         )",
         [],
     )?;
@@ -927,6 +985,8 @@ mod test {
         conf.add_experiment("Throughput", "Read", "tput_1").unwrap();
         conf.add_experiment("Throughput", "Write", "tput_2")
             .unwrap();
+        conf.add_experiment("Throughput", "Version", "tput_version")
+            .unwrap();
 
         conf
     }
@@ -959,19 +1019,29 @@ mod test {
                     code: "tput_1".to_string(),
                     exp_type: "Throughput".to_string(),
                     label: "Read".to_string(),
-                    n_datapoints: 0
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
                 },
                 ExperimentStatus {
                     code: "tput_lat".to_string(),
                     exp_type: "Throughput Latency".to_string(),
                     label: "Write".to_string(),
-                    n_datapoints: 0
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
+                },
+                ExperimentStatus {
+                    code: "tput_version".to_string(),
+                    exp_type: "Throughput".to_string(),
+                    label: "Version".to_string(),
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
                 },
                 ExperimentStatus {
                     code: "tput_2".to_string(),
                     exp_type: "Throughput".to_string(),
                     label: "Write".to_string(),
-                    n_datapoints: 0
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
                 },
             ]
             .into_iter()
@@ -1025,6 +1095,8 @@ mod test {
             })
             .collect::<Vec<Datapoint>>();
 
+        let v3 = vec![];
+
         v1.sort_by_key(|x| x.tag);
         v2.sort_by_key(|x| x.tag);
 
@@ -1035,16 +1107,102 @@ mod test {
             .cloned()
             .collect::<Vec<_>>();
 
-        assert_eq!(datapoints.len(), 2);
-        assert!(datapoints[0] == v1 || datapoints[0] == v2);
-        assert!(datapoints[1] == v1 || datapoints[1] == v2);
+        assert_eq!(datapoints.len(), 3);
+        assert!(datapoints[0] == v1 || datapoints[0] == v2 || datapoints[0] == v3);
+        assert!(datapoints[1] == v1 || datapoints[1] == v2 || datapoints[1] == v3);
+        assert!(datapoints[2] == v1 || datapoints[2] == v2 || datapoints[2] == v3);
 
         let (datapoints, x_mag, y_mag) = handle.get_datapoints_magnitudes().unwrap();
         let datapoints = datapoints.values().cloned().collect::<Vec<_>>();
-        assert_eq!(datapoints.len(), 2);
-        assert!(datapoints[0] == v1 || datapoints[0] == v2);
-        assert!(datapoints[1] == v1 || datapoints[1] == v2);
+        assert_eq!(datapoints.len(), 3);
+        assert!(datapoints[0] == v1 || datapoints[0] == v2 || datapoints[0] == v3);
+        assert!(datapoints[1] == v1 || datapoints[1] == v2 || datapoints[1] == v3);
+        assert!(datapoints[2] == v1 || datapoints[2] == v2 || datapoints[2] == v3);
         assert_eq!(x_mag, Magnitude::Normal);
         assert_eq!(y_mag, Magnitude::Kilo);
+    }
+
+    #[test]
+    fn versions() {
+        fn gen_datapoint(v: i64) -> Datapoint {
+            Datapoint::new(Some(v), None, Some(v), None)
+                .unwrap()
+                .tag(42)
+        }
+
+        let config = gen_in_memory_config();
+
+        let handle = config.get_inserter_handle("tput_version").unwrap();
+        let get_handle = config.get_experiment_handle("Throughput").unwrap();
+
+        assert!(handle.version(42).is_err());
+
+        handle.add_datapoint(gen_datapoint(1)).unwrap();
+        assert_eq!(
+            get_handle.get_datapoints().unwrap()["Version"][0],
+            gen_datapoint(1)
+        );
+        assert_eq!(handle.version(42).unwrap(), 1);
+        let mut versions = handle.versions(42).unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1]);
+
+        handle.add_datapoint(gen_datapoint(2)).unwrap();
+        assert_eq!(
+            get_handle.get_datapoints().unwrap()["Version"][0],
+            gen_datapoint(2)
+        );
+        assert_eq!(handle.version(42).unwrap(), 2);
+        let mut versions = handle.versions(42).unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2]);
+
+        handle.revert(42, None).unwrap();
+        assert_eq!(
+            get_handle.get_datapoints().unwrap()["Version"][0],
+            gen_datapoint(1)
+        );
+        assert_eq!(handle.version(42).unwrap(), 1);
+        let mut versions = handle.versions(42).unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2]);
+
+        handle.add_datapoint(gen_datapoint(3)).unwrap();
+        assert_eq!(
+            get_handle.get_datapoints().unwrap()["Version"][0],
+            gen_datapoint(3)
+        );
+        assert_eq!(handle.version(42).unwrap(), 3);
+        let mut versions = handle.versions(42).unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2, 3]);
+
+        handle.revert(42, Some(1)).unwrap();
+        assert_eq!(
+            get_handle.get_datapoints().unwrap()["Version"][0],
+            gen_datapoint(1)
+        );
+        assert_eq!(handle.version(42).unwrap(), 1);
+        let mut versions = handle.versions(42).unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2, 3]);
+
+        handle.revert(42, Some(2)).unwrap();
+        assert_eq!(
+            get_handle.get_datapoints().unwrap()["Version"][0],
+            gen_datapoint(2)
+        );
+        assert_eq!(handle.version(42).unwrap(), 2);
+        let mut versions = handle.versions(42).unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2, 3]);
+
+        handle.revert(42, Some(3)).unwrap();
+        assert_eq!(
+            get_handle.get_datapoints().unwrap()["Version"][0],
+            gen_datapoint(3)
+        );
+        assert_eq!(handle.version(42).unwrap(), 3);
+        assert_eq!(handle.versions(42).unwrap(), vec![1, 2, 3]);
     }
 }

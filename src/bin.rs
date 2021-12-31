@@ -8,11 +8,14 @@ fn main() -> Result<()> {
 
     let config = Config::new()?;
     let experiments = config.experiments();
+    let lines = config.experiment_lines()?;
 
     let available_experiments = experiments
         .iter()
         .map(|e| e.exp_type.as_ref())
         .collect::<Vec<&str>>();
+
+    let available_codes = lines.iter().map(|e| e.code.as_ref()).collect::<Vec<&str>>();
 
     let app = App::new("bencher")
         .version("0.1")
@@ -93,6 +96,37 @@ fn main() -> Result<()> {
                         .required(true),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("versions")
+                .about("get the list of versions for an specific point from an experiment")
+                .arg(
+                    Arg::with_name("experiment_code")
+                        .help("the code for this experiment")
+                        .required(true)
+                        .possible_values(&available_codes),
+                )
+                .arg(
+                    Arg::with_name("tag")
+                        .help("the tag to get versions from")
+                        .required(true),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name("revert")
+                .about("revert a tag in an experiment (possible to a previous value)")
+                .arg(
+                    Arg::with_name("experiment_code")
+                        .help("the code for this experiment")
+                        .required(true)
+                        .possible_values(&available_codes),
+                )
+                .arg(
+                    Arg::with_name("tag")
+                        .help("the tag to get versions from")
+                        .required(true),
+                )
+                .arg(Arg::with_name("version").help("the (optional) version to revert to")),
+        )
         .get_matches();
 
     match app.subcommand() {
@@ -100,22 +134,22 @@ fn main() -> Result<()> {
         ("status", Some(_)) => status(&config)?,
         ("table", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("exp_type").unwrap())?
+                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_table()?;
         }
         ("latex", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("exp_type").unwrap())?
+                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_latex_table()?;
         }
         ("dat", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("exp_type").unwrap())?
+                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_dat(matches.value_of("prefix").unwrap())?;
         }
         ("gnuplot", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("exp_type").unwrap())?
+                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_gnuplot(matches.value_of("prefix").unwrap())?;
         }
         ("add", Some(matches)) => {
@@ -125,6 +159,48 @@ fn main() -> Result<()> {
                 matches.value_of("experiment_code").unwrap(),
             )?;
         }
+        ("versions", Some(matches)) => {
+            let handle = config
+                .get_inserter_handle(matches.value_of("experiment_code").unwrap())
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "could not find experiment {}",
+                        matches.value_of("experiment_code").unwrap()
+                    )
+                })?;
+            let tag = matches.value_of("tag").unwrap().parse::<isize>()?;
+            let version = handle.version(tag)?;
+            let versions = handle.versions(tag)?;
+            println!(
+                "[{}:{}]: {}",
+                matches.value_of("experiment_code").unwrap(),
+                tag,
+                versions
+                    .into_iter()
+                    .map(|v| if v == version {
+                        format!("[{}]", v)
+                    } else {
+                        format!("{}", v)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
+        ("revert", Some(matches)) => config
+            .get_inserter_handle(matches.value_of("experiment_code").unwrap())
+            .ok_or_else(|| {
+                eyre::eyre!(
+                    "could not find experiment {}",
+                    matches.value_of("experiment_code").unwrap()
+                )
+            })?
+            .revert(
+                matches.value_of("tag").unwrap().parse::<isize>()?,
+                matches
+                    .value_of("version")
+                    .map(|v| v.parse::<usize>())
+                    .transpose()?,
+            )?,
         _ => {}
     }
 
@@ -176,6 +252,7 @@ fn status(config: &Config) -> Result<()> {
                 s.code.cell().justify(Justify::Center).bold(true),
                 s.exp_type.cell().justify(Justify::Center).bold(true),
                 s.label.cell().justify(Justify::Center).bold(true),
+                s.n_active_datapoints.cell().justify(Justify::Right),
                 s.n_datapoints.cell().justify(Justify::Right),
             ]
         })
@@ -185,6 +262,10 @@ fn status(config: &Config) -> Result<()> {
             "Code".cell().justify(Justify::Center).bold(true),
             "Type".cell().justify(Justify::Center).bold(true),
             "Label".cell().justify(Justify::Center).bold(true),
+            "#Active Datapoints"
+                .cell()
+                .justify(Justify::Center)
+                .bold(true),
             "#Datapoints".cell().justify(Justify::Center).bold(true),
         ])
         .bold(true);

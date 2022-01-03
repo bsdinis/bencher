@@ -439,15 +439,18 @@ impl<'a> ExperimentHandle<'a> {
             })
         });
 
-        let (x_idx, _) = x_magnitude_counts
+        let x_idx = x_magnitude_counts
             .iter()
             .enumerate()
             .max_by_key(|v| v.1)
+            .map(|(idx, c)| if *c > 0 { idx } else { 3 })
             .unwrap();
-        let (y_idx, _) = y_magnitude_counts
+
+        let y_idx = y_magnitude_counts
             .iter()
             .enumerate()
             .max_by_key(|v| v.1)
+            .map(|(idx, c)| if *c > 0 { idx } else { 3 })
             .unwrap();
 
         let x_mag = match x_idx {

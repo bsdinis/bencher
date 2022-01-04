@@ -20,18 +20,18 @@ pub struct Config {
     inner_config: BencherConfig,
 }
 
-pub struct ExperimentHandle<'a> {
+pub struct XYExperimentHandle<'a> {
     db: &'a rusqlite::Connection,
-    lines: Vec<ExperimentLine>,
+    lines: Vec<XYExperimentLine>,
     x_label: String,
     x_units: String,
     y_label: String,
     y_units: String,
 }
 
-pub struct LineHandle<'a> {
+pub struct XYLineHandle<'a> {
     db: &'a rusqlite::Connection,
-    experiment_line: ExperimentLine,
+    experiment_line: XYExperimentLine,
 }
 
 impl<'a> Config {
@@ -59,7 +59,7 @@ impl<'a> Config {
         Ok(Self { db, inner_config })
     }
 
-    pub fn add_experiment(&self, exp_type: &str, label: &str, code: &str) -> Result<()> {
+    pub fn add_xy_experiment(&self, exp_type: &str, label: &str, code: &str) -> Result<()> {
         let mut stmt = self.db.prepare(
             "insert into experiments (
                     experiment_type,
@@ -80,7 +80,7 @@ impl<'a> Config {
         Ok(())
     }
 
-    fn get_experiment(&self, exp_type: &str) -> Result<Experiment> {
+    fn get_xy_experiment(&self, exp_type: &str) -> Result<XYExperiment> {
         Ok(self
             .inner_config
             .experiments
@@ -100,21 +100,21 @@ impl<'a> Config {
             .clone())
     }
 
-    fn get_experiment_line(&self, code: &str) -> Result<ExperimentLine> {
+    fn get_xy_experiment_line(&self, code: &str) -> Result<XYExperimentLine> {
         let (label, exp_type) = self
             .db
             .query_row("select experiment_label, experiment_type from experiments where experiment_code = :code",
                        rusqlite::named_params! {":code": code}, |row| Ok((row.get(0).unwrap_or("".to_string()).clone(), row.get(1).unwrap_or("".to_string()).clone())))?;
 
-        self.get_experiment(&exp_type).map(|e| ExperimentLine {
+        self.get_xy_experiment(&exp_type).map(|e| XYExperimentLine {
             experiment: e,
             label,
             code: code.to_string(),
         })
     }
 
-    fn get_experiment_lines(&self, exp_type: &str) -> Result<Vec<ExperimentLine>> {
-        let experiment = self.get_experiment(exp_type)?;
+    fn get_xy_experiment_lines(&self, exp_type: &str) -> Result<Vec<XYExperimentLine>> {
+        let experiment = self.get_xy_experiment(exp_type)?;
 
         let mut stmt = self
             .db
@@ -122,7 +122,7 @@ impl<'a> Config {
 
         let mut vec = vec![];
         for line in stmt.query_map(rusqlite::named_params! {":type": exp_type}, |row| {
-            Ok(ExperimentLine {
+            Ok(XYExperimentLine {
                 experiment: experiment.clone(),
                 code: row.get(0).unwrap_or("".to_string()),
                 label: row.get(1).unwrap_or("".to_string()),
@@ -134,11 +134,11 @@ impl<'a> Config {
         Ok(vec)
     }
 
-    pub fn experiments(&self) -> Vec<Experiment> {
+    pub fn experiments(&self) -> Vec<XYExperiment> {
         self.inner_config.experiments.clone()
     }
 
-    pub fn experiment_lines(&self) -> Result<Vec<ExperimentLine>> {
+    pub fn experiment_lines(&self) -> Result<Vec<XYExperimentLine>> {
         let mut stmt = self.db.prepare(
             "select experiment_type, experiment_label, experiment_code from experiments",
         )?;
@@ -146,8 +146,8 @@ impl<'a> Config {
         let mut vec = vec![];
         for line in stmt.query_map([], |row| {
             let s = row.get(0).unwrap_or("".to_string());
-            let experiment = self.get_experiment(&s).unwrap();
-            Ok(ExperimentLine {
+            let experiment = self.get_xy_experiment(&s).unwrap();
+            Ok(XYExperimentLine {
                 experiment,
                 label: row.get(1).unwrap_or("".to_string()),
                 code: row.get(2).unwrap_or("".to_string()),
@@ -210,26 +210,26 @@ impl<'a> Config {
             .is_some()
     }
 
-    pub fn get_experiment_handle(&'a self, exp_type: &str) -> Result<ExperimentHandle<'a>> {
-        Ok(ExperimentHandle::new(
+    pub fn get_xy_experiment_handle(&'a self, exp_type: &str) -> Result<XYExperimentHandle<'a>> {
+        Ok(XYExperimentHandle::new(
             &self.db,
-            self.get_experiment(exp_type)?,
-            self.get_experiment_lines(exp_type)?,
+            self.get_xy_experiment(exp_type)?,
+            self.get_xy_experiment_lines(exp_type)?,
         )?)
     }
 
-    pub fn get_line_handle(&'a self, code: &str) -> Option<LineHandle<'a>> {
-        self.get_experiment_line(code)
-            .map(|exp_line| LineHandle::new(&self.db, exp_line))
+    pub fn get_xy_line_handle(&'a self, code: &str) -> Option<XYLineHandle<'a>> {
+        self.get_xy_experiment_line(code)
+            .map(|exp_line| XYLineHandle::new(&self.db, exp_line))
             .ok()
     }
 }
 
-impl<'a> ExperimentHandle<'a> {
+impl<'a> XYExperimentHandle<'a> {
     fn new(
         db: &'a rusqlite::Connection,
-        experiment: Experiment,
-        lines: Vec<ExperimentLine>,
+        experiment: XYExperiment,
+        lines: Vec<XYExperimentLine>,
     ) -> Result<Self, BencherError> {
         if lines.len() == 0 {
             Err(BencherError::NoLines(experiment.exp_type))
@@ -249,7 +249,7 @@ impl<'a> ExperimentHandle<'a> {
         }
     }
 
-    fn get_datapoints(&self) -> Result<BTreeMap<String, Vec<Datapoint>>> {
+    fn get_datapoints(&self) -> Result<BTreeMap<String, Vec<XYDatapoint>>> {
         fn create_confidence_arg(
             min_int: Option<i64>,
             max_int: Option<i64>,
@@ -304,12 +304,10 @@ impl<'a> ExperimentHandle<'a> {
             let mut vec = vec![];
             for datapoint in
                 stmt.query_map(rusqlite::named_params! { ":code": &exp.code }, |row| {
-                    let mut datapoint = Datapoint::new(
-                        row.get(0).unwrap(),
-                        row.get(1).unwrap(),
-                        row.get(2).unwrap(),
-                        row.get(3).unwrap(),
-                    )?;
+                    let mut datapoint = XYDatapoint::new(
+                        Value::new(row.get(0).unwrap(), row.get(1).unwrap())?,
+                        Value::new(row.get(2).unwrap(), row.get(3).unwrap())?,
+                    );
 
                     // x 1 - 99
                     if let Some(e) = create_confidence_arg(
@@ -410,7 +408,7 @@ impl<'a> ExperimentHandle<'a> {
 
     fn get_datapoints_magnitudes(
         &self,
-    ) -> Result<(BTreeMap<String, Vec<Datapoint>>, Magnitude, Magnitude)> {
+    ) -> Result<(BTreeMap<String, Vec<XYDatapoint>>, Magnitude, Magnitude)> {
         let datapoints = self.get_datapoints()?;
         let mut x_magnitude_counts = [0; 7];
         let mut y_magnitude_counts = [0; 7];
@@ -681,15 +679,15 @@ set yrange [*:*]
     }
 }
 
-impl<'a> LineHandle<'a> {
-    fn new(db: &'a rusqlite::Connection, experiment_line: ExperimentLine) -> Self {
+impl<'a> XYLineHandle<'a> {
+    fn new(db: &'a rusqlite::Connection, experiment_line: XYExperimentLine) -> Self {
         Self {
             db,
             experiment_line,
         }
     }
 
-    fn tag_datapoint(&self, datapoint: Datapoint) -> Result<(Datapoint, isize)> {
+    fn tag_datapoint(&self, datapoint: XYDatapoint) -> Result<(XYDatapoint, isize)> {
         if datapoint.tag.is_some() {
             let new_version = self.db.query_row(
                     "select max(abs(version)) + 1 from results where experiment_code = :code and tag = :tag",
@@ -713,7 +711,7 @@ impl<'a> LineHandle<'a> {
         self.experiment_line.label.as_ref()
     }
 
-    pub fn add_datapoint(&self, datapoint: Datapoint) -> Result<()> {
+    pub fn add_datapoint(&self, datapoint: XYDatapoint) -> Result<()> {
         let (datapoint, version) = self.tag_datapoint(datapoint)?;
         let mut stmt = self.db.prepare(
             "insert into results (
@@ -998,16 +996,16 @@ mod test {
     use super::*;
     use std::collections::HashSet;
 
-    fn gen_experiments() -> Vec<Experiment> {
+    fn gen_experiments() -> Vec<XYExperiment> {
         vec![
-            Experiment {
+            XYExperiment {
                 exp_type: "Throughput Latency".to_string(),
                 x_label: "Throughput".to_string(),
                 x_units: "ops/s".to_string(),
                 y_label: "Latency".to_string(),
                 y_units: "s".to_string(),
             },
-            Experiment {
+            XYExperiment {
                 exp_type: "Throughput".to_string(),
                 x_label: "Offered Load".to_string(),
                 x_units: "ops/s".to_string(),
@@ -1031,25 +1029,26 @@ mod test {
         )
         .unwrap();
 
-        conf.add_experiment("Throughput Latency", "Write", "tput_lat")
+        conf.add_xy_experiment("Throughput Latency", "Write", "tput_lat")
             .unwrap();
-        conf.add_experiment("Throughput", "Read", "tput_1").unwrap();
-        conf.add_experiment("Throughput", "Write", "tput_2")
+        conf.add_xy_experiment("Throughput", "Read", "tput_1")
             .unwrap();
-        conf.add_experiment("Throughput", "Version", "tput_version")
+        conf.add_xy_experiment("Throughput", "Write", "tput_2")
+            .unwrap();
+        conf.add_xy_experiment("Throughput", "Version", "tput_version")
             .unwrap();
 
         conf
     }
 
-    fn populate(handle1: &LineHandle, handle2: &LineHandle) {
+    fn populate(handle1: &XYLineHandle, handle2: &XYLineHandle) {
         for x in (0..=100).step_by(10) {
             let y = 100 - x;
             handle1
-                .add_datapoint(Datapoint::new(Some(x), None, Some(x * x), None).unwrap())
+                .add_datapoint(XYDatapoint::new(Value::Int(x), Value::Int(x * x)))
                 .unwrap();
             handle2
-                .add_datapoint(Datapoint::new(Some(y), None, Some(10_000 - y * y), None).unwrap())
+                .add_datapoint(XYDatapoint::new(Value::Int(y), Value::Int(10_000 - y * y)))
                 .unwrap();
         }
     }
@@ -1104,47 +1103,42 @@ mod test {
     fn config_get_handle() {
         let config = gen_in_memory_config();
         assert_eq!(config.has_experiment("Latency"), false);
-        assert!(config.get_experiment_handle("Latency").is_err());
+        assert!(config.get_xy_experiment_handle("Latency").is_err());
         assert_eq!(config.has_experiment("Throughput"), true);
-        assert!(config.get_experiment_handle("Throughput").is_ok());
+        assert!(config.get_xy_experiment_handle("Throughput").is_ok());
     }
 
     #[test]
     fn can_populate() {
         let config = gen_in_memory_config();
-        let handle1 = config.get_line_handle("tput_1").unwrap();
-        let handle2 = config.get_line_handle("tput_2").unwrap();
+        let handle1 = config.get_xy_line_handle("tput_1").unwrap();
+        let handle2 = config.get_xy_line_handle("tput_2").unwrap();
         populate(&handle1, &handle2);
     }
 
     #[test]
     fn can_get() {
         let config = gen_in_memory_config();
-        let handle1 = config.get_line_handle("tput_1").unwrap();
-        let handle2 = config.get_line_handle("tput_2").unwrap();
+        let handle1 = config.get_xy_line_handle("tput_1").unwrap();
+        let handle2 = config.get_xy_line_handle("tput_2").unwrap();
         populate(&handle1, &handle2);
 
-        let handle = config.get_experiment_handle("Throughput").unwrap();
+        let handle = config.get_xy_experiment_handle("Throughput").unwrap();
 
         let mut v1 = (0..=100)
             .step_by(10)
             .into_iter()
-            .map(|x| {
-                Datapoint::new(Some(x), None, Some(x * x), None)
-                    .unwrap()
-                    .tag(x as isize / 10)
-            })
-            .collect::<Vec<Datapoint>>();
+            .map(|x| XYDatapoint::new(Value::Int(x), Value::Int(x * x)).tag(x as isize / 10))
+            .collect::<Vec<XYDatapoint>>();
         let mut v2 = (0..=100)
             .step_by(10)
             .into_iter()
             .map(|x| 100 - x)
             .map(|x| {
-                Datapoint::new(Some(x), None, Some(10_000 - x * x), None)
-                    .unwrap()
+                XYDatapoint::new(Value::Int(x), Value::Int(10_000 - x * x))
                     .tag((100 - x) as isize / 10)
             })
-            .collect::<Vec<Datapoint>>();
+            .collect::<Vec<XYDatapoint>>();
 
         let v3 = vec![];
 
@@ -1175,16 +1169,14 @@ mod test {
 
     #[test]
     fn versions() {
-        fn gen_datapoint(v: i64) -> Datapoint {
-            Datapoint::new(Some(v), None, Some(v), None)
-                .unwrap()
-                .tag(42)
+        fn gen_datapoint(v: i64) -> XYDatapoint {
+            XYDatapoint::new(Value::Int(v), Value::Int(v)).tag(42)
         }
 
         let config = gen_in_memory_config();
 
-        let handle = config.get_line_handle("tput_version").unwrap();
-        let get_handle = config.get_experiment_handle("Throughput").unwrap();
+        let handle = config.get_xy_line_handle("tput_version").unwrap();
+        let get_handle = config.get_xy_experiment_handle("Throughput").unwrap();
 
         assert!(handle.version(42).is_err());
 

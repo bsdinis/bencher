@@ -55,6 +55,14 @@ pub enum Value {
 }
 
 impl Value {
+    pub fn new(i: Option<i64>, f: Option<f64>) -> Result<Self, BencherError> {
+        match (i, f) {
+            (Some(i), _) => Ok(Value::Int(i)),
+            (_, Some(f)) => Ok(Value::Float(f)),
+            _ => Err(BencherError::EmptyValue),
+        }
+    }
+
     pub fn is_int(&self) -> bool {
         match self {
             Value::Int(_) => true,
@@ -129,7 +137,7 @@ impl Value {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Datapoint {
+pub struct XYDatapoint {
     pub x: Value,
 
     pub x_confidence: BTreeMap<Confidence, (Value, Value)>,
@@ -141,30 +149,15 @@ pub struct Datapoint {
     pub tag: Option<isize>,
 }
 
-impl Datapoint {
-    pub fn new(
-        x_int: Option<i64>,
-        x_float: Option<f64>,
-
-        y_int: Option<i64>,
-        y_float: Option<f64>,
-    ) -> Result<Datapoint, BencherError> {
-        let x = x_int
-            .map(|x| Value::Int(x))
-            .or(x_float.map(|x| Value::Float(x)))
-            .ok_or_else(|| BencherError::MissingXValue)?;
-        let y = y_int
-            .map(|y| Value::Int(y))
-            .or(y_float.map(|y| Value::Float(y)))
-            .ok_or_else(|| BencherError::MissingYValue)?;
-
-        Ok(Datapoint {
+impl XYDatapoint {
+    pub fn new(x: Value, y: Value) -> Self {
+        XYDatapoint {
             x,
             y,
             x_confidence: BTreeMap::new(),
             y_confidence: BTreeMap::new(),
             tag: None,
-        })
+        }
     }
 
     pub fn tag(mut self, tag: isize) -> Self {
@@ -236,7 +229,7 @@ impl Datapoint {
 }
 
 #[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
-pub struct Experiment {
+pub struct XYExperiment {
     pub exp_type: String,
     pub x_label: String,
     pub x_units: String,
@@ -244,8 +237,8 @@ pub struct Experiment {
     pub y_units: String,
 }
 
-pub struct ExperimentLine {
-    pub experiment: Experiment,
+pub struct XYExperimentLine {
+    pub experiment: XYExperiment,
     pub label: String,
     pub code: String,
 }
@@ -265,7 +258,7 @@ pub struct BencherConfig {
     pub database_filepath: String,
 
     /// experiment descriptions
-    pub experiments: Vec<Experiment>,
+    pub experiments: Vec<XYExperiment>,
 }
 
 #[cfg(test)]
@@ -297,6 +290,13 @@ mod test {
         assert_eq!(Confidence::new(95).unwrap(), Confidence::Five);
         assert_eq!(Confidence::new(90).unwrap(), Confidence::Ten);
         assert_eq!(Confidence::new(75).unwrap(), Confidence::TwentyFive);
+    }
+
+    #[test]
+    fn value_new() {
+        assert_eq!(Value::new(Some(1234), None).unwrap(), Value::Int(1234));
+        assert_eq!(Value::new(None, Some(5.5)).unwrap(), Value::Float(5.5));
+        assert!(Value::new(None, None).is_err());
     }
 
     #[test]
@@ -353,32 +353,10 @@ mod test {
     }
 
     #[test]
-    fn datapoint_new() {
-        assert!(Datapoint::new(None, None, None, None).is_err());
-
-        assert!(Datapoint::new(Some(0), None, None, None).is_err());
-        assert!(Datapoint::new(Some(0), Some(0.0), None, None).is_err());
-
-        assert!(Datapoint::new(None, None, Some(0), None).is_err());
-        assert!(Datapoint::new(None, None, Some(0), Some(0.0)).is_err());
-
-        assert!(Datapoint::new(Some(0), None, Some(0), None).is_ok());
-        assert!(Datapoint::new(Some(0), Some(0.0), Some(0), None).is_ok());
-        assert!(Datapoint::new(Some(0), None, Some(0), Some(0.0)).is_ok());
-        assert!(Datapoint::new(Some(0), Some(0.0), Some(0), Some(0.0)).is_ok());
-    }
-
-    #[test]
     fn datapoint_tag() {
+        assert_eq!(XYDatapoint::new(Value::Int(0), Value::Int(0)).tag, None);
         assert_eq!(
-            Datapoint::new(Some(0), None, Some(0), None).unwrap().tag,
-            None
-        );
-        assert_eq!(
-            Datapoint::new(Some(0), None, Some(0), None)
-                .unwrap()
-                .tag(42)
-                .tag,
+            XYDatapoint::new(Value::Int(0), Value::Int(0)).tag(42).tag,
             Some(42)
         );
     }
@@ -386,50 +364,39 @@ mod test {
     #[test]
     fn datapoint_magnitudes() {
         assert_eq!(
-            Datapoint::new(Some(50_000_000), None, None, Some(0.00005))
-                .unwrap()
-                .magnitudes(),
+            XYDatapoint::new(Value::Int(50_000_000), Value::Float(0.00005)).magnitudes(),
             (Magnitude::Mega, Magnitude::Micro)
         );
     }
 
     #[test]
     fn datapoint_confidence() {
-        assert!(Datapoint::new(Some(0), None, Some(0), None)
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
             .add_x_confidence(0, Either::Left((0, 0)))
             .is_err());
-        assert!(Datapoint::new(Some(0), None, Some(0), None)
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
             .add_x_confidence(1, Either::Left((0, 0)))
             .is_ok());
-        assert!(Datapoint::new(Some(0), None, Some(0), None)
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
             .add_x_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_err());
-        assert!(Datapoint::new(None, Some(0.0), Some(0), None)
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Float(0.0), Value::Int(0))
             .add_x_confidence(1, Either::Left((0, 0)))
             .is_err());
-        assert!(Datapoint::new(None, Some(0.0), Some(0), None)
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Float(0.0), Value::Int(0))
             .add_x_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_ok());
 
-        assert!(Datapoint::new(Some(0), None, Some(0), None)
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
             .add_y_confidence(1, Either::Left((0, 0)))
             .is_ok());
-        assert!(Datapoint::new(Some(0), None, Some(0), None)
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
             .add_y_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_err());
-        assert!(Datapoint::new(Some(0), None, None, Some(0.0))
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Int(0), Value::Float(0.0))
             .add_y_confidence(1, Either::Left((0, 0)))
             .is_err());
-        assert!(Datapoint::new(Some(0), None, None, Some(0.0))
-            .unwrap()
+        assert!(XYDatapoint::new(Value::Int(0), Value::Float(0.0))
             .add_y_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_ok());
     }

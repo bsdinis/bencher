@@ -168,17 +168,17 @@ fn main() -> Result<()> {
         ("status", Some(_)) => status(&config)?,
         ("table", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
+                .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_table()?;
         }
         ("latex", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
+                .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_latex_table()?;
         }
         ("dat", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
+                .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_dat(
                     matches.value_of("prefix").unwrap(),
                     matches
@@ -191,7 +191,7 @@ fn main() -> Result<()> {
         }
         ("gnuplot", Some(matches)) => {
             config
-                .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
+                .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_gnuplot(
                     matches.value_of("prefix").unwrap(),
                     matches.is_present("xbar"),
@@ -199,7 +199,7 @@ fn main() -> Result<()> {
                 )?;
         }
         ("add", Some(matches)) => {
-            config.add_experiment(
+            config.add_xy_experiment(
                 matches.value_of("experiment_type").unwrap(),
                 matches.value_of("experiment_label").unwrap(),
                 matches.value_of("experiment_code").unwrap(),
@@ -207,7 +207,7 @@ fn main() -> Result<()> {
         }
         ("versions", Some(matches)) => {
             let handle = config
-                .get_line_handle(matches.value_of("experiment_code").unwrap())
+                .get_xy_line_handle(matches.value_of("experiment_code").unwrap())
                 .ok_or_else(|| {
                     eyre::eyre!(
                         "could not find experiment {}",
@@ -233,7 +233,7 @@ fn main() -> Result<()> {
             )
         }
         ("revert", Some(matches)) => config
-            .get_line_handle(matches.value_of("experiment_code").unwrap())
+            .get_xy_line_handle(matches.value_of("experiment_code").unwrap())
             .ok_or_else(|| {
                 eyre::eyre!(
                     "could not find experiment {}",

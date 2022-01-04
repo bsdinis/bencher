@@ -6,11 +6,8 @@ pub enum BencherError {
     #[error("Config file not found")]
     NotFound,
 
-    #[error("Datapoint is missing x value")]
-    MissingXValue,
-
-    #[error("Datapoint is missing y value")]
-    MissingYValue,
+    #[error("Value cannot be empty")]
+    EmptyValue,
 
     #[error("SQLite error")]
     Database(#[from] rusqlite::Error),

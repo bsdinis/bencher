@@ -180,7 +180,7 @@ impl<'a> Config {
 
         let mut stmt = self
             .db
-            .prepare("select experiment_code, count(*) from results group by experiment_code")?;
+            .prepare("select experiment_code, count(*) from xy_results group by experiment_code")?;
         for status in stmt.query_map([], |row| {
             Ok((
                 row.get(0).unwrap_or("".to_string()),
@@ -193,7 +193,7 @@ impl<'a> Config {
 
         let mut stmt = self
             .db
-            .prepare("select experiment_code, tag, max(version) from results")?;
+            .prepare("select experiment_code, tag, max(version) from xy_results")?;
         for code in stmt.query_map([], |row| Ok(row.get(0).unwrap_or("".to_string())))? {
             map.get_mut(&code.unwrap())
                 .map(|s| s.n_active_datapoints += 1);
@@ -293,7 +293,7 @@ impl<'a> XYExperimentHandle<'a> {
                     y_float_25, y_float_75,
 
                     tag, max(version)
-             from results
+             from xy_results
              where experiment_code = :code
              group by tag
              ",
@@ -690,7 +690,7 @@ impl<'a> XYLineHandle<'a> {
     fn tag_datapoint(&self, datapoint: XYDatapoint) -> Result<(XYDatapoint, isize)> {
         if datapoint.tag.is_some() {
             let new_version = self.db.query_row(
-                    "select max(abs(version)) + 1 from results where experiment_code = :code and tag = :tag",
+                    "select max(abs(version)) + 1 from xy_results where experiment_code = :code and tag = :tag",
                 rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": datapoint.tag.unwrap() },
                 |row| Ok(row.get(0).unwrap_or(1)),
             )?;
@@ -699,7 +699,7 @@ impl<'a> XYLineHandle<'a> {
         }
 
         let new_tag = self.db.query_row(
-            "select max(tag) + 1 from results where experiment_code = :code",
+            "select max(tag) + 1 from xy_results where experiment_code = :code",
             rusqlite::named_params! { ":code": self.experiment_line.code },
             |row| Ok(row.get(0).unwrap_or(0)),
         )?;
@@ -714,7 +714,7 @@ impl<'a> XYLineHandle<'a> {
     pub fn add_datapoint(&self, datapoint: XYDatapoint) -> Result<()> {
         let (datapoint, version) = self.tag_datapoint(datapoint)?;
         let mut stmt = self.db.prepare(
-            "insert into results (
+            "insert into xy_results (
                     experiment_code,
                     tag,
                     version,
@@ -868,7 +868,7 @@ impl<'a> XYLineHandle<'a> {
 
     pub fn version(&self, tag: isize) -> Result<usize> {
         Ok(self.db.query_row(
-            "select max(version) from results where experiment_code = :code and tag = :tag",
+            "select max(version) from xy_results where experiment_code = :code and tag = :tag",
             rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag },
             |row| row.get(0),
         )?)
@@ -876,7 +876,7 @@ impl<'a> XYLineHandle<'a> {
 
     pub fn versions(&self, tag: isize) -> Result<Vec<usize>> {
         let mut stmt = self.db.prepare(
-            "select abs(version) from results where experiment_code = :code and tag = :tag",
+            "select abs(version) from xy_results where experiment_code = :code and tag = :tag",
         )?;
 
         let result = stmt.query_map(
@@ -889,13 +889,13 @@ impl<'a> XYLineHandle<'a> {
 
     pub fn revert(&self, tag: isize, version: Option<usize>) -> Result<()> {
         if let Some(v) = version {
-            self.db.execute("update results set version = abs(version) where experiment_code = :code and tag = :tag and abs(version) = :version",
+            self.db.execute("update xy_results set version = abs(version) where experiment_code = :code and tag = :tag and abs(version) = :version",
                             rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag, ":version": v})?;
-            self.db.execute("update results set version = -version where experiment_code = :code and tag = :tag and version > :version",
+            self.db.execute("update xy_results set version = -version where experiment_code = :code and tag = :tag and version > :version",
                             rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag, ":version": v})?;
         } else {
-            self.db.execute("update results set version = -version where experiment_code = :code and tag = :tag and version in
-                            (select max(version) from results where experiment_code = :code and tag = :tag)",
+            self.db.execute("update xy_results set version = -version where experiment_code = :code and tag = :tag and version in
+                            (select max(version) from xy_results where experiment_code = :code and tag = :tag)",
                             rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag })?;
         }
         Ok(())
@@ -938,7 +938,7 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
     )?;
 
     db.execute(
-        "create table if not exists results (
+        "create table if not exists xy_results (
             experiment_code text not null,
             tag int not null,
             version int not null,

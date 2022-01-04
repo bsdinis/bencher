@@ -59,6 +59,26 @@ fn main() -> Result<()> {
                     Arg::with_name("prefix")
                         .help("the prefix for the files")
                         .required(true),
+                )
+                .arg(
+                    Arg::with_name("xbar")
+                        .short("x")
+                        .long("xbar")
+                        .takes_value(true)
+                        .value_name("percentile")
+                        .possible_values(&["1", "5", "10", "25", "75", "90", "95", "99"])
+                        .help("If toggled, output dat with x error bars, with the given percentile")
+                        .required(false),
+                )
+                .arg(
+                    Arg::with_name("ybar")
+                        .short("y")
+                        .long("ybar")
+                        .takes_value(true)
+                        .value_name("percentile")
+                        .possible_values(&["1", "5", "10", "25", "75", "90", "95", "99"])
+                        .help("If toggled, output dat with y error bars, with the given percentile")
+                        .required(false),
                 ),
         )
         .subcommand(
@@ -74,6 +94,20 @@ fn main() -> Result<()> {
                     Arg::with_name("prefix")
                         .help("the prefix for the files")
                         .required(true),
+                )
+                .arg(
+                    Arg::with_name("xbar")
+                        .short("x")
+                        .short("xbar")
+                        .help("If toggled, dump gnuplot with capacity to display x error bars")
+                        .required(false),
+                )
+                .arg(
+                    Arg::with_name("ybar")
+                        .short("y")
+                        .long("ybar")
+                        .help("If toggled, dump gnuplot with capacity to display y error bars")
+                        .required(false),
                 ),
         )
         .subcommand(
@@ -145,12 +179,24 @@ fn main() -> Result<()> {
         ("dat", Some(matches)) => {
             config
                 .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
-                .dump_dat(matches.value_of("prefix").unwrap())?;
+                .dump_dat(
+                    matches.value_of("prefix").unwrap(),
+                    matches
+                        .value_of("xbar")
+                        .map(|c| c.parse::<usize>().unwrap()),
+                    matches
+                        .value_of("ybar")
+                        .map(|c| c.parse::<usize>().unwrap()),
+                )?;
         }
         ("gnuplot", Some(matches)) => {
             config
                 .get_experiment_handle(matches.value_of("experiment_type").unwrap())?
-                .dump_gnuplot(matches.value_of("prefix").unwrap())?;
+                .dump_gnuplot(
+                    matches.value_of("prefix").unwrap(),
+                    matches.is_present("xbar"),
+                    matches.is_present("ybar"),
+                )?;
         }
         ("add", Some(matches)) => {
             config.add_experiment(

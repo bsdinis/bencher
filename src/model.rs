@@ -1,5 +1,5 @@
 use either::Either;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::error::*;
 
@@ -28,7 +28,7 @@ impl Magnitude {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Confidence {
     One,
     Five,
@@ -132,11 +132,11 @@ impl Value {
 pub struct Datapoint {
     pub x: Value,
 
-    pub x_confidence: HashMap<Confidence, (Value, Value)>,
+    pub x_confidence: BTreeMap<Confidence, (Value, Value)>,
 
     pub y: Value,
 
-    pub y_confidence: HashMap<Confidence, (Value, Value)>,
+    pub y_confidence: BTreeMap<Confidence, (Value, Value)>,
 
     pub tag: Option<isize>,
 }
@@ -161,8 +161,8 @@ impl Datapoint {
         Ok(Datapoint {
             x,
             y,
-            x_confidence: HashMap::new(),
-            y_confidence: HashMap::new(),
+            x_confidence: BTreeMap::new(),
+            y_confidence: BTreeMap::new(),
             tag: None,
         })
     }

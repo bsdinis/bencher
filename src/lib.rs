@@ -1,7 +1,7 @@
 use cli_table::{format::Justify, Cell, Style, Table};
 use either::Either;
 use eyre::Result;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -160,7 +160,7 @@ impl<'a> Config {
     }
 
     pub fn status(&self) -> Result<Vec<ExperimentStatus>> {
-        let mut map = HashMap::with_capacity(self.inner_config.experiments.len());
+        let mut map = BTreeMap::new();
 
         let mut stmt = self.db.prepare(
             "select experiment_code, experiment_label, experiment_type from experiments",
@@ -249,7 +249,7 @@ impl<'a> ExperimentHandle<'a> {
         }
     }
 
-    fn get_datapoints(&self) -> Result<HashMap<String, Vec<Datapoint>>> {
+    fn get_datapoints(&self) -> Result<BTreeMap<String, Vec<Datapoint>>> {
         fn create_confidence_arg(
             min_int: Option<i64>,
             max_int: Option<i64>,
@@ -299,7 +299,7 @@ impl<'a> ExperimentHandle<'a> {
              ",
         )?;
 
-        let mut map = HashMap::with_capacity(self.lines.len());
+        let mut map = BTreeMap::new();
         for exp in &self.lines {
             let mut vec = vec![];
             for datapoint in
@@ -410,7 +410,7 @@ impl<'a> ExperimentHandle<'a> {
 
     fn get_datapoints_magnitudes(
         &self,
-    ) -> Result<(HashMap<String, Vec<Datapoint>>, Magnitude, Magnitude)> {
+    ) -> Result<(BTreeMap<String, Vec<Datapoint>>, Magnitude, Magnitude)> {
         let datapoints = self.get_datapoints()?;
         let mut x_magnitude_counts = [0; 7];
         let mut y_magnitude_counts = [0; 7];
@@ -541,7 +541,7 @@ impl<'a> ExperimentHandle<'a> {
         Ok(())
     }
 
-    pub fn dump_gnuplot(&self, prefix: &str) -> Result<()> {
+    pub fn dump_gnuplot(&self, prefix: &str, xbar: bool, ybar: bool) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
         println!(
             "reset
@@ -590,20 +590,46 @@ set yrange [*:*]
             datapoints
                 .iter()
                 .enumerate()
-                .map(|(idx, (label, _))| format!(
-                    "'{}_{}.dat' title '{}' with lp linestyle {}",
-                    prefix,
-                    label.to_lowercase(),
-                    label,
-                    2 * idx + 1
-                ))
+                .map(|(idx, (label, _))| match (xbar, ybar) {
+                    (true, true) => format!(
+                        "'{}_{}.dat' title '{}' with xyerrorbars linestyle {}, '' title '' with lines linestyle {}",
+                        prefix,
+                        label.to_lowercase(),
+                        label,
+                        2 * idx + 2,
+                        2 * idx + 1,
+                    ),
+                    (true, false) => format!(
+                        "'{}_{}.dat' title '{}' with xerrorbars linestyle {}, '' title '' with lines linestyle {}",
+                        prefix,
+                        label.to_lowercase(),
+                        label,
+                        2 * idx + 2,
+                        2 * idx + 1,
+                    ),
+                    (false, true) => format!(
+                        "'{}_{}.dat' title '{}' with yerrorbars linestyle {}, '' title '' with lines linestyle {}",
+                        prefix,
+                        label.to_lowercase(),
+                        label,
+                        2 * idx + 2,
+                        2 * idx + 1,
+                    ),
+                    (false, false) => format!(
+                        "'{}_{}.dat' title '{}' with linespoint linestyle {}",
+                        prefix,
+                        label.to_lowercase(),
+                        label,
+                        2 * idx + 1
+                    ),
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         );
         Ok(())
     }
 
-    pub fn dump_dat(&self, prefix: &str) -> Result<()> {
+    pub fn dump_dat(&self, prefix: &str, xbar: Option<usize>, ybar: Option<usize>) -> Result<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
         for (label, datapoints) in datapoints {
@@ -620,12 +646,34 @@ set yrange [*:*]
                 self.y_units
             )?;
             for d in datapoints {
-                writeln!(
+                write!(
                     &mut file,
                     "{:>8} {:>8}",
                     d.x.display_with_magnitude(x_mag),
                     d.y.display_with_magnitude(y_mag)
                 )?;
+
+                if let Some(c) = xbar {
+                    let (xmin, xmax) = d.get_x_confidence(c).unwrap_or((d.x.clone(), d.x.clone()));
+                    write!(
+                        &mut file,
+                        " {:>8} {:>8}",
+                        xmin.display_with_magnitude(x_mag),
+                        xmax.display_with_magnitude(x_mag)
+                    )?;
+                }
+
+                if let Some(c) = ybar {
+                    let (ymin, ymax) = d.get_y_confidence(c).unwrap_or((d.y.clone(), d.y.clone()));
+                    write!(
+                        &mut file,
+                        " {:>8} {:>8}",
+                        ymin.display_with_magnitude(y_mag),
+                        ymax.display_with_magnitude(y_mag)
+                    )?;
+                }
+
+                writeln!(&mut file, "")?;
             }
             writeln!(&mut file, "# end")?;
         }

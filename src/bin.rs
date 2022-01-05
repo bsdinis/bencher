@@ -1,5 +1,5 @@
-use bencher::Config;
-use clap::{App, Arg, SubCommand};
+use bencher::{Axis, Config};
+use clap::{App, Arg};
 use cli_table::{format::Justify, Cell, Style, Table};
 use eyre::Result;
 
@@ -21,48 +21,48 @@ fn main() -> Result<()> {
         .version("0.1")
         .author("Baltasar D. <baltasar.dinis@tecnico.ulisboa.pt>")
         .about("Manage benchmark results")
-        .subcommand(SubCommand::with_name("list").about("list the available experiments"))
+        .subcommand(App::new("list").about("list the available experiments"))
         .subcommand(
-            SubCommand::with_name("status")
+            App::new("status")
                 .about("queries the database to see how many datapoints we have per test label"),
         )
         .subcommand(
-            SubCommand::with_name("table")
+            App::new("table")
                 .about("get the results for a specific experiment in tabular form")
                 .arg(
-                    Arg::with_name("experiment_type")
+                    Arg::new("experiment_type")
                         .help("the experiment to use")
                         .required(true)
                         .possible_values(&available_experiments),
                 ),
         )
         .subcommand(
-            SubCommand::with_name("latex")
+            App::new("latex")
                 .about("get the results for a specific experiment in a latex table form")
                 .arg(
-                    Arg::with_name("experiment_type")
+                    Arg::new("experiment_type")
                         .help("the experiment to use")
                         .required(true)
                         .possible_values(&available_experiments),
                 ),
         )
         .subcommand(
-            SubCommand::with_name("dat")
+            App::new("dat")
                 .about("get the results for a specific experiment in a .dat form")
                 .arg(
-                    Arg::with_name("experiment_type")
+                    Arg::new("experiment_type")
                         .help("the experiment to use")
                         .required(true)
                         .possible_values(&available_experiments),
                 )
                 .arg(
-                    Arg::with_name("prefix")
+                    Arg::new("prefix")
                         .help("the prefix for the files")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name("xbar")
-                        .short("x")
+                    Arg::new("xbar")
+                        .short('x')
                         .long("xbar")
                         .takes_value(true)
                         .value_name("percentile")
@@ -71,8 +71,8 @@ fn main() -> Result<()> {
                         .required(false),
                 )
                 .arg(
-                    Arg::with_name("ybar")
-                        .short("y")
+                    Arg::new("ybar")
+                        .short('y')
                         .long("ybar")
                         .takes_value(true)
                         .value_name("percentile")
@@ -82,101 +82,119 @@ fn main() -> Result<()> {
                 ),
         )
         .subcommand(
-            SubCommand::with_name("gnuplot")
+            App::new("gnuplot")
                 .about("get the gnuplot representation for an experiment")
                 .arg(
-                    Arg::with_name("experiment_type")
+                    Arg::new("experiment_type")
                         .help("the experiment to use")
                         .required(true)
                         .possible_values(&available_experiments),
                 )
                 .arg(
-                    Arg::with_name("prefix")
+                    Arg::new("prefix")
                         .help("the prefix for the files")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name("xbar")
-                        .short("x")
-                        .short("xbar")
+                    Arg::new("xbar")
+                        .short('x')
+                        .long("xbar")
                         .help("If toggled, dump gnuplot with capacity to display x error bars")
                         .required(false),
                 )
                 .arg(
-                    Arg::with_name("ybar")
-                        .short("y")
+                    Arg::new("ybar")
+                        .short('y')
                         .long("ybar")
                         .help("If toggled, dump gnuplot with capacity to display y error bars")
                         .required(false),
                 ),
         )
         .subcommand(
-            SubCommand::with_name("add")
+            App::new("add")
                 .about("add a new experiment")
                 .arg(
-                    Arg::with_name("experiment_type")
+                    Arg::new("experiment_type")
                         .help("the experiment to use")
                         .required(true)
                         .possible_values(&available_experiments),
                 )
                 .arg(
-                    Arg::with_name("experiment_label")
+                    Arg::new("experiment_label")
                         .help("the label for this experiment")
                         .required(true),
                 )
                 .arg(
-                    Arg::with_name("experiment_code")
+                    Arg::new("experiment_code")
                         .help("the code for this experiment")
                         .required(true),
                 ),
         )
         .subcommand(
-            SubCommand::with_name("versions")
+            App::new("raw")
+                .about("ouptputs one of the axis of a point from the experiment in the raw format `<percentile> <unnormalized value>`. Useful for manipulating points")
+                .arg(
+                    Arg::new("experiment_code")
+                        .help("the code for this experiment")
+                        .required(true)
+                        .possible_values(&available_codes),
+                )
+                .arg(
+                    Arg::new("tag")
+                        .help("the tag to get versions from")
+                        .required(true),
+                )
+                .arg( Arg::new("x").short('x').conflicts_with("y").required_unless_present("y"))
+                .arg( Arg::new("y").short('y').conflicts_with("x").required_unless_present("x"))
+                ,
+        )
+        .subcommand(
+            App::new("versions")
                 .about("get the list of versions for an specific point from an experiment")
                 .arg(
-                    Arg::with_name("experiment_code")
+                    Arg::new("experiment_code")
                         .help("the code for this experiment")
                         .required(true)
                         .possible_values(&available_codes),
                 )
                 .arg(
-                    Arg::with_name("tag")
+                    Arg::new("tag")
                         .help("the tag to get versions from")
                         .required(true),
                 ),
         )
         .subcommand(
-            SubCommand::with_name("revert")
+            App::new("revert")
                 .about("revert a tag in an experiment (possible to a previous value)")
                 .arg(
-                    Arg::with_name("experiment_code")
+                    Arg::new("experiment_code")
                         .help("the code for this experiment")
                         .required(true)
                         .possible_values(&available_codes),
                 )
                 .arg(
-                    Arg::with_name("tag")
+                    Arg::new("tag")
                         .help("the tag to get versions from")
                         .required(true),
                 )
-                .arg(Arg::with_name("version").help("the (optional) version to revert to")),
+                .arg(Arg::new("version").help("the (optional) version to revert to")),
         )
         .get_matches();
 
     match app.subcommand() {
-        ("list", Some(_)) => list(&config)?,
-        ("status", Some(_)) => status(&config)?,
-        ("table", Some(matches)) => {
+        Some(("list", _)) => list(&config)?,
+        Some(("status", _)) => status(&config)?,
+        Some(("table", matches)) => {
             config
                 .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_table()?;
         }
-        ("latex", Some(matches)) => {
+        Some(("latex", matches)) => {
             config
                 .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_latex_table()?;
         }
-        ("dat", Some(matches)) => {
+        Some(("dat", matches)) => {
             config
                 .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_dat(
@@ -189,7 +207,7 @@ fn main() -> Result<()> {
                         .map(|c| c.parse::<usize>().unwrap()),
                 )?;
         }
-        ("gnuplot", Some(matches)) => {
+        Some(("gnuplot", matches)) => {
             config
                 .get_xy_experiment_handle(matches.value_of("experiment_type").unwrap())?
                 .dump_gnuplot(
@@ -198,14 +216,33 @@ fn main() -> Result<()> {
                     matches.is_present("ybar"),
                 )?;
         }
-        ("add", Some(matches)) => {
+        Some(("add", matches)) => {
             config.add_xy_experiment(
                 matches.value_of("experiment_type").unwrap(),
                 matches.value_of("experiment_label").unwrap(),
                 matches.value_of("experiment_code").unwrap(),
             )?;
         }
-        ("versions", Some(matches)) => {
+        Some(("raw", matches)) => {
+            let handle = config
+                .get_xy_line_handle(matches.value_of("experiment_code").unwrap())
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "could not find experiment {}",
+                        matches.value_of("experiment_code").unwrap()
+                    )
+                })?;
+            let tag = matches.value_of("tag").unwrap().parse::<isize>()?;
+            handle.dump_raw(
+                tag,
+                if matches.is_present("x") {
+                    Axis::X
+                } else {
+                    Axis::Y
+                },
+            )?;
+        }
+        Some(("versions", matches)) => {
             let handle = config
                 .get_xy_line_handle(matches.value_of("experiment_code").unwrap())
                 .ok_or_else(|| {
@@ -232,7 +269,7 @@ fn main() -> Result<()> {
                     .join(", ")
             )
         }
-        ("revert", Some(matches)) => config
+        Some(("revert", matches)) => config
             .get_xy_line_handle(matches.value_of("experiment_code").unwrap())
             .ok_or_else(|| {
                 eyre::eyre!(

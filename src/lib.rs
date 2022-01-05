@@ -15,6 +15,11 @@ pub use model::*;
 const BENCHER_CONFIG_FILENAME: &str = ".bencher-config";
 const COLORS: [&str; 5] = ["f6511d", "ffb400", "00a6ed", "7fb800", "0d2c54"];
 
+pub enum Axis {
+    X,
+    Y,
+}
+
 pub struct Config {
     db: rusqlite::Connection,
     inner_config: BencherConfig,
@@ -225,6 +230,161 @@ impl<'a> Config {
     }
 }
 
+fn xy_datapoint_from_row(row: &rusqlite::Row) -> Result<XYDatapoint, rusqlite::Error> {
+    fn create_confidence_arg(
+        min_int: Option<i64>,
+        max_int: Option<i64>,
+        min_float: Option<f64>,
+        max_float: Option<f64>,
+    ) -> Option<Either<(i64, i64), (f64, f64)>> {
+        if let (Some(lower), Some(upper)) = (min_int, max_int) {
+            Some(Either::Left((lower, upper)))
+        } else if let (Some(lower), Some(upper)) = (min_float, max_float) {
+            Some(Either::Right((lower, upper)))
+        } else {
+            None
+        }
+    }
+
+    let mut datapoint = XYDatapoint::new(
+        Value::new(row.get(0).unwrap(), row.get(1).unwrap())?,
+        Value::new(row.get(2).unwrap(), row.get(3).unwrap())?,
+    );
+
+    // x 1 - 99
+    if let Some(e) = create_confidence_arg(
+        row.get(4).unwrap(),
+        row.get(5).unwrap(),
+        row.get(6).unwrap(),
+        row.get(7).unwrap(),
+    ) {
+        let _ = datapoint.add_x_confidence(1, e);
+    }
+
+    // x 5 - 95
+    if let Some(e) = create_confidence_arg(
+        row.get(8).unwrap(),
+        row.get(9).unwrap(),
+        row.get(10).unwrap(),
+        row.get(11).unwrap(),
+    ) {
+        let _ = datapoint.add_x_confidence(5, e);
+    }
+
+    // x 10 - 90
+    if let Some(e) = create_confidence_arg(
+        row.get(12).unwrap(),
+        row.get(13).unwrap(),
+        row.get(14).unwrap(),
+        row.get(15).unwrap(),
+    ) {
+        let _ = datapoint.add_x_confidence(10, e);
+    }
+
+    // x 25 - 75
+    if let Some(e) = create_confidence_arg(
+        row.get(16).unwrap(),
+        row.get(17).unwrap(),
+        row.get(18).unwrap(),
+        row.get(19).unwrap(),
+    ) {
+        let _ = datapoint.add_x_confidence(10, e);
+    }
+
+    // y 1 - 99
+    if let Some(e) = create_confidence_arg(
+        row.get(20).unwrap(),
+        row.get(21).unwrap(),
+        row.get(22).unwrap(),
+        row.get(23).unwrap(),
+    ) {
+        let _ = datapoint.add_y_confidence(1, e);
+    }
+
+    // y 5 - 95
+    if let Some(e) = create_confidence_arg(
+        row.get(24).unwrap(),
+        row.get(25).unwrap(),
+        row.get(26).unwrap(),
+        row.get(27).unwrap(),
+    ) {
+        let _ = datapoint.add_y_confidence(5, e);
+    }
+
+    // y 10 - 90
+    if let Some(e) = create_confidence_arg(
+        row.get(28).unwrap(),
+        row.get(29).unwrap(),
+        row.get(30).unwrap(),
+        row.get(31).unwrap(),
+    ) {
+        let _ = datapoint.add_y_confidence(10, e);
+    }
+
+    // y 25 - 75
+    if let Some(e) = create_confidence_arg(
+        row.get(32).unwrap(),
+        row.get(33).unwrap(),
+        row.get(34).unwrap(),
+        row.get(35).unwrap(),
+    ) {
+        let _ = datapoint.add_y_confidence(10, e);
+    }
+
+    Ok(if let Some(tag) = row.get(36).unwrap() {
+        datapoint.tag(tag)
+    } else {
+        datapoint
+    })
+}
+
+fn get_xy_datapoints(db: &rusqlite::Connection, code: &str) -> Result<Vec<XYDatapoint>> {
+    let mut stmt = db.prepare(
+        "select x_int, x_float,
+                y_int, y_float,
+                x_int_1,    x_int_99,
+                x_float_1,  x_float_99,
+
+                x_int_5,    x_int_95,
+                x_float_5,  x_float_95,
+
+                x_int_10,   x_int_90,
+                x_float_10, x_float_90,
+
+                x_int_25,   x_int_75,
+                x_float_25, x_float_75,
+
+                y_int_1,    y_int_99,
+                y_float_1,  y_float_99,
+
+                y_int_5,    y_int_95,
+                y_float_5,  y_float_95,
+
+                y_int_10,   y_int_90,
+                y_float_10, y_float_90,
+
+                y_int_25,   y_int_75,
+                y_float_25, y_float_75,
+
+                tag, max(version)
+         from xy_results
+         where experiment_code = :code
+         group by tag
+         ",
+    )?;
+
+    let mut vec = vec![];
+    for datapoint in stmt.query_map(
+        rusqlite::named_params! { ":code": code },
+        xy_datapoint_from_row,
+    )? {
+        vec.push(datapoint?);
+    }
+
+    vec.sort_by_key(|d| d.tag);
+    Ok(vec)
+}
+
 impl<'a> XYExperimentHandle<'a> {
     fn new(
         db: &'a rusqlite::Connection,
@@ -250,157 +410,10 @@ impl<'a> XYExperimentHandle<'a> {
     }
 
     fn get_datapoints(&self) -> Result<BTreeMap<String, Vec<XYDatapoint>>> {
-        fn create_confidence_arg(
-            min_int: Option<i64>,
-            max_int: Option<i64>,
-            min_float: Option<f64>,
-            max_float: Option<f64>,
-        ) -> Option<Either<(i64, i64), (f64, f64)>> {
-            if let (Some(lower), Some(upper)) = (min_int, max_int) {
-                Some(Either::Left((lower, upper)))
-            } else if let (Some(lower), Some(upper)) = (min_float, max_float) {
-                Some(Either::Right((lower, upper)))
-            } else {
-                None
-            }
-        }
-
-        let mut stmt = self.db.prepare(
-            "select x_int, x_float,
-                    y_int, y_float,
-                    x_int_1,    x_int_99,
-                    x_float_1,  x_float_99,
-
-                    x_int_5,    x_int_95,
-                    x_float_5,  x_float_95,
-
-                    x_int_10,   x_int_90,
-                    x_float_10, x_float_90,
-
-                    x_int_25,   x_int_75,
-                    x_float_25, x_float_75,
-
-                    y_int_1,    y_int_99,
-                    y_float_1,  y_float_99,
-
-                    y_int_5,    y_int_95,
-                    y_float_5,  y_float_95,
-
-                    y_int_10,   y_int_90,
-                    y_float_10, y_float_90,
-
-                    y_int_25,   y_int_75,
-                    y_float_25, y_float_75,
-
-                    tag, max(version)
-             from xy_results
-             where experiment_code = :code
-             group by tag
-             ",
-        )?;
-
         let mut map = BTreeMap::new();
         for exp in &self.lines {
-            let mut vec = vec![];
-            for datapoint in
-                stmt.query_map(rusqlite::named_params! { ":code": &exp.code }, |row| {
-                    let mut datapoint = XYDatapoint::new(
-                        Value::new(row.get(0).unwrap(), row.get(1).unwrap())?,
-                        Value::new(row.get(2).unwrap(), row.get(3).unwrap())?,
-                    );
-
-                    // x 1 - 99
-                    if let Some(e) = create_confidence_arg(
-                        row.get(4).unwrap(),
-                        row.get(5).unwrap(),
-                        row.get(6).unwrap(),
-                        row.get(7).unwrap(),
-                    ) {
-                        let _ = datapoint.add_x_confidence(1, e);
-                    }
-
-                    // x 5 - 95
-                    if let Some(e) = create_confidence_arg(
-                        row.get(8).unwrap(),
-                        row.get(9).unwrap(),
-                        row.get(10).unwrap(),
-                        row.get(11).unwrap(),
-                    ) {
-                        let _ = datapoint.add_x_confidence(5, e);
-                    }
-
-                    // x 10 - 90
-                    if let Some(e) = create_confidence_arg(
-                        row.get(12).unwrap(),
-                        row.get(13).unwrap(),
-                        row.get(14).unwrap(),
-                        row.get(15).unwrap(),
-                    ) {
-                        let _ = datapoint.add_x_confidence(10, e);
-                    }
-
-                    // x 25 - 75
-                    if let Some(e) = create_confidence_arg(
-                        row.get(16).unwrap(),
-                        row.get(17).unwrap(),
-                        row.get(18).unwrap(),
-                        row.get(19).unwrap(),
-                    ) {
-                        let _ = datapoint.add_x_confidence(10, e);
-                    }
-
-                    // y 1 - 99
-                    if let Some(e) = create_confidence_arg(
-                        row.get(20).unwrap(),
-                        row.get(21).unwrap(),
-                        row.get(22).unwrap(),
-                        row.get(23).unwrap(),
-                    ) {
-                        let _ = datapoint.add_y_confidence(1, e);
-                    }
-
-                    // y 5 - 95
-                    if let Some(e) = create_confidence_arg(
-                        row.get(24).unwrap(),
-                        row.get(25).unwrap(),
-                        row.get(26).unwrap(),
-                        row.get(27).unwrap(),
-                    ) {
-                        let _ = datapoint.add_y_confidence(5, e);
-                    }
-
-                    // y 10 - 90
-                    if let Some(e) = create_confidence_arg(
-                        row.get(28).unwrap(),
-                        row.get(29).unwrap(),
-                        row.get(30).unwrap(),
-                        row.get(31).unwrap(),
-                    ) {
-                        let _ = datapoint.add_y_confidence(10, e);
-                    }
-
-                    // y 25 - 75
-                    if let Some(e) = create_confidence_arg(
-                        row.get(32).unwrap(),
-                        row.get(33).unwrap(),
-                        row.get(34).unwrap(),
-                        row.get(35).unwrap(),
-                    ) {
-                        let _ = datapoint.add_y_confidence(10, e);
-                    }
-
-                    Ok(if let Some(tag) = row.get(36).unwrap() {
-                        datapoint.tag(tag)
-                    } else {
-                        datapoint
-                    })
-                })?
-            {
-                vec.push(datapoint?);
-            }
-
-            vec.sort_by_key(|d| d.tag);
-            map.insert(exp.label.clone(), vec);
+            let datapoints = get_xy_datapoints(self.db, &exp.code)?;
+            map.insert(exp.label.clone(), datapoints);
         }
 
         Ok(map)
@@ -863,6 +876,88 @@ impl<'a> XYLineHandle<'a> {
             ":y_float_25": datapoint.get_y_confidence(25).clone().map(|val| val.0.to_float()).flatten(),
             ":y_float_75": datapoint.get_y_confidence(25).clone().map(|val| val.1.to_float()).flatten(),
         })?;
+        Ok(())
+    }
+
+    pub fn dump_raw(&self, tag: isize, axis: Axis) -> Result<()> {
+        let datapoint = self.db.query_row(
+            "select x_int, x_float,
+                y_int, y_float,
+                x_int_1,    x_int_99,
+                x_float_1,  x_float_99,
+
+                x_int_5,    x_int_95,
+                x_float_5,  x_float_95,
+
+                x_int_10,   x_int_90,
+                x_float_10, x_float_90,
+
+                x_int_25,   x_int_75,
+                x_float_25, x_float_75,
+
+                y_int_1,    y_int_99,
+                y_float_1,  y_float_99,
+
+                y_int_5,    y_int_95,
+                y_float_5,  y_float_95,
+
+                y_int_10,   y_int_90,
+                y_float_10, y_float_90,
+
+                y_int_25,   y_int_75,
+                y_float_25, y_float_75,
+
+                tag, max(version)
+         from xy_results
+         where experiment_code = :code and tag = :tag",
+            rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag },
+            xy_datapoint_from_row,
+        )?;
+
+        match axis {
+            Axis::X => {
+                println!(
+                    "{:>3}\t{}",
+                    50,
+                    datapoint.x.display_with_magnitude(Magnitude::Normal)
+                );
+                for confidence in &[1, 5, 10, 25] {
+                    if let Some((min, max)) = datapoint.get_x_confidence(*confidence) {
+                        println!(
+                            "{:>3}\t{}",
+                            confidence,
+                            min.display_with_magnitude(Magnitude::Normal)
+                        );
+                        println!(
+                            "{:>3}\t{}",
+                            100 - confidence,
+                            max.display_with_magnitude(Magnitude::Normal)
+                        );
+                    }
+                }
+            }
+            Axis::Y => {
+                println!(
+                    "{:>3}\t{}",
+                    50,
+                    datapoint.y.display_with_magnitude(Magnitude::Normal)
+                );
+                for confidence in &[1, 5, 10, 25] {
+                    if let Some((min, max)) = datapoint.get_y_confidence(*confidence) {
+                        println!(
+                            "{:>3}\t{}",
+                            confidence,
+                            min.display_with_magnitude(Magnitude::Normal)
+                        );
+                        println!(
+                            "{:>3}\t{}",
+                            100 - confidence,
+                            max.display_with_magnitude(Magnitude::Normal)
+                        );
+                    }
+                }
+            }
+        }
         Ok(())
     }
 

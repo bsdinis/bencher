@@ -1,7 +1,9 @@
-use bencher::{Axis, Config};
+use bencher::{Axis, Config, Value, XYDatapoint};
 use clap::{App, Arg};
 use cli_table::{format::Justify, Cell, Style, Table};
+use either::Either;
 use eyre::Result;
+use std::collections::HashMap;
 
 fn main() -> Result<()> {
     color_eyre::install()?;
@@ -132,7 +134,7 @@ fn main() -> Result<()> {
         )
         .subcommand(
             App::new("raw")
-                .about("ouptputs one of the axis of a point from the experiment in the raw format `<percentile> <unnormalized value>`. Useful for manipulating points")
+                .about("outputs one of the axis of a point from the experiment in the raw format `<percentile> <unnormalized value>`. Useful for manipulating points")
                 .arg(
                     Arg::new("experiment_code")
                         .help("the code for this experiment")
@@ -141,11 +143,35 @@ fn main() -> Result<()> {
                 )
                 .arg(
                     Arg::new("tag")
-                        .help("the tag to get versions from")
+                        .help("the tag to get")
                         .required(true),
                 )
                 .arg( Arg::new("x").short('x').conflicts_with("y").required_unless_present("y"))
                 .arg( Arg::new("y").short('y').conflicts_with("x").required_unless_present("x"))
+                ,
+        )
+        .subcommand(
+            App::new("raw_add")
+                .about("add a new datapoint to an experiment from std in. Note that this is designed for manipulation of existing points, to be used in conjunction with the raw get command")
+                .arg(
+                    Arg::new("experiment_code")
+                        .help("the code for this experiment")
+                        .required(true)
+                        .possible_values(&available_codes),
+                )
+                .arg(
+                    Arg::new("tag")
+                        .help("the tag of the point to add")
+                        .required(true),
+                )
+                .arg( Arg::new("x")
+                      .short('x')
+                      .help("value of the x coordinate")
+                      .conflicts_with("y").required_unless_present("y").takes_value(true))
+                .arg( Arg::new("y")
+                      .short('y')
+                      .help("value of the y coordinate")
+                      .conflicts_with("x").required_unless_present("x").takes_value(true))
                 ,
         )
         .subcommand(
@@ -241,6 +267,20 @@ fn main() -> Result<()> {
                     Axis::Y
                 },
             )?;
+        }
+        Some(("raw_add", matches)) => {
+            let handle = config
+                .get_xy_line_handle(matches.value_of("experiment_code").unwrap())
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "could not find experiment {}",
+                        matches.value_of("experiment_code").unwrap()
+                    )
+                })?;
+            let tag = matches.value_of("tag").unwrap().parse::<isize>()?;
+            let datapoint =
+                raw_datapoint_from_stdin(matches.value_of("x"), matches.value_of("y"))?.tag(tag);
+            handle.add_datapoint(datapoint)?;
         }
         Some(("versions", matches)) => {
             let handle = config
@@ -355,4 +395,129 @@ fn status(config: &Config) -> Result<()> {
 
     cli_table::print_stdout(table)?;
     Ok(())
+}
+
+fn raw_datapoint_from_stdin(x: Option<&str>, y: Option<&str>) -> Result<XYDatapoint> {
+    let mut raw_percentiles = HashMap::with_capacity(10);
+    let mut buffer = String::new();
+    let mut line = 0;
+    loop {
+        match std::io::stdin().read_line(&mut buffer) {
+            Ok(0) => break, // EOF
+            Err(e) => Err(e)?,
+            Ok(_) => {
+                eprintln!("recvd line: {}", buffer);
+                let mut iter = buffer.split_whitespace();
+                let percentile = if let Some(p) = iter.next() {
+                    p.parse::<usize>()?
+                } else {
+                    return Err(eyre::eyre!("no data in line {}", line));
+                };
+
+                let value = if let Some(v) = iter.next() {
+                    if let Ok(i) = v.parse::<i64>() {
+                        Either::Left(i)
+                    } else {
+                        Either::Right(v.parse::<f64>()?)
+                    }
+                } else {
+                    return Err(eyre::eyre!("no second field in line {}", line));
+                };
+
+                raw_percentiles.insert(percentile, value);
+                buffer.clear();
+            }
+        }
+
+        line += 0;
+    }
+    if !raw_percentiles.contains_key(&50) {
+        return Err(eyre::eyre!("missing median (key = 50)"));
+    }
+
+    let mut percentiles = if raw_percentiles.values().all(|x| x.is_left()) {
+        raw_percentiles
+            .into_iter()
+            .map(|(k, v)| (k, Value::Int(v.left().unwrap())))
+            .collect::<HashMap<usize, _>>()
+    } else {
+        raw_percentiles
+            .into_iter()
+            .map(|(k, v)| {
+                (
+                    k,
+                    Value::Float(v.right().or(v.left().map(|x| x as f64)).unwrap()),
+                )
+            })
+            .collect::<HashMap<usize, _>>()
+    };
+
+    eprintln!("{:?}", percentiles);
+
+    let x = x
+        .map(|v| {
+            if let Ok(a) = v.parse::<i64>() {
+                Ok(Value::Int(a))
+            } else {
+                v.parse::<f64>().map(|b| Value::Float(b))
+            }
+        })
+        .transpose()?;
+    let y = y
+        .map(|v| {
+            if let Ok(a) = v.parse::<i64>() {
+                Ok(Value::Int(a))
+            } else {
+                v.parse::<f64>().map(|b| Value::Float(b))
+            }
+        })
+        .transpose()?;
+
+    match (x, y) {
+        (Some(x), _) => {
+            let mut datapoint = XYDatapoint::new(x, percentiles.remove(&50).unwrap());
+            for c in &[1, 5, 10, 25] {
+                let simmetric = 100 - c;
+                if percentiles.contains_key(c) && percentiles.contains_key(&simmetric) {
+                    match (
+                        percentiles.remove(c).unwrap(),
+                        percentiles.remove(&simmetric).unwrap(),
+                    ) {
+                        (Value::Int(min), Value::Int(max)) => {
+                            datapoint.add_y_confidence(*c, Either::Left((min, max)))?
+                        }
+                        (Value::Float(min), Value::Float(max)) => {
+                            datapoint.add_y_confidence(*c, Either::Right((min, max)))?
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
+            Ok(datapoint)
+        }
+        (_, Some(y)) => {
+            let mut datapoint = XYDatapoint::new(percentiles.remove(&50).unwrap(), y);
+            for c in &[1, 5, 10, 25] {
+                let simmetric = 100 - c;
+                if percentiles.contains_key(c) && percentiles.contains_key(&simmetric) {
+                    match (
+                        percentiles.remove(c).unwrap(),
+                        percentiles.remove(&(100 - c)).unwrap(),
+                    ) {
+                        (Value::Int(min), Value::Int(max)) => {
+                            datapoint.add_x_confidence(*c, Either::Left((min, max)))?
+                        }
+                        (Value::Float(min), Value::Float(max)) => {
+                            datapoint.add_x_confidence(*c, Either::Right((min, max)))?
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+
+            Ok(datapoint)
+        }
+        _ => return Err(eyre::eyre!("neither x nor y is set")),
+    }
 }

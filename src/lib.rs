@@ -20,23 +20,10 @@ pub enum Axis {
     Y,
 }
 
+#[derive(Debug)]
 pub struct Config {
     db: rusqlite::Connection,
     inner_config: BencherConfig,
-}
-
-pub struct XYExperimentHandle<'a> {
-    db: &'a rusqlite::Connection,
-    lines: Vec<XYExperimentLine>,
-    x_label: String,
-    x_units: String,
-    y_label: String,
-    y_units: String,
-}
-
-pub struct XYLineHandle<'a> {
-    db: &'a rusqlite::Connection,
-    experiment_line: XYExperimentLine,
 }
 
 impl<'a> Config {
@@ -64,6 +51,27 @@ impl<'a> Config {
         Ok(Self { db, inner_config })
     }
 
+    pub fn add_linear_experiment(&self, exp_type: &str, label: &str, code: &str) -> Result<()> {
+        let mut stmt = self.db.prepare(
+            "insert into experiments (
+                    experiment_type,
+                    experiment_label,
+                    experiment_code
+                    ) values (
+                    :exp_type,
+                    :label,
+                    :code)",
+        )?;
+
+        stmt.execute(rusqlite::named_params! {
+            ":exp_type": exp_type,
+            ":label": label,
+            ":code": code,
+        })?;
+
+        Ok(())
+    }
+
     pub fn add_xy_experiment(&self, exp_type: &str, label: &str, code: &str) -> Result<()> {
         let mut stmt = self.db.prepare(
             "insert into experiments (
@@ -85,17 +93,119 @@ impl<'a> Config {
         Ok(())
     }
 
-    fn get_xy_experiment(&self, exp_type: &str) -> Result<XYExperiment> {
+    fn get_linear_experiment(&self, exp_type: &str) -> Result<LinearExperiment> {
         Ok(self
             .inner_config
-            .experiments
+            .linear_experiments
             .iter()
             .find(|e| e.exp_type == exp_type)
             .ok_or_else(|| {
                 BencherError::ExperimentNotFound(
                     exp_type.to_string(),
                     self.inner_config
-                        .experiments
+                        .linear_experiments
+                        .iter()
+                        .map(|e| e.exp_type.clone())
+                        .collect::<Vec<_>>()
+                        .join(","),
+                )
+            })?
+            .clone())
+    }
+
+    fn get_linear_experiment_set(&self, code: &str) -> Result<LinearExperimentSet> {
+        let (label, exp_type) = self
+            .db
+            .query_row("select experiment_label, experiment_type from experiments where experiment_code = :code",
+                       rusqlite::named_params! {":code": code}, |row| Ok((row.get(0).unwrap_or("".to_string()).clone(), row.get(1).unwrap_or("".to_string()).clone())))?;
+
+        self.get_linear_experiment(&exp_type)
+            .map(|e| LinearExperimentSet {
+                experiment: e,
+                label,
+                code: code.to_string(),
+            })
+    }
+
+    fn get_linear_experiment_sets(&self, exp_type: &str) -> Result<Vec<LinearExperimentSet>> {
+        let experiment = self.get_linear_experiment(exp_type)?;
+
+        let mut stmt = self
+            .db
+            .prepare("select experiment_code, experiment_label from experiments where experiment_type = :type")?;
+
+        let mut vec = vec![];
+        for line in stmt.query_map(rusqlite::named_params! {":type": exp_type}, |row| {
+            Ok(LinearExperimentSet {
+                experiment: experiment.clone(),
+                code: row.get(0).unwrap_or("".to_string()),
+                label: row.get(1).unwrap_or("".to_string()),
+            })
+        })? {
+            vec.push(line.unwrap());
+        }
+
+        Ok(vec)
+    }
+
+    pub fn linear_experiments(&self) -> Vec<LinearExperiment> {
+        self.inner_config.linear_experiments.clone()
+    }
+
+    pub fn linear_experiment_sets(&self) -> Result<Vec<LinearExperimentSet>> {
+        let mut stmt = self.db.prepare(
+            "select experiment_type, experiment_label, experiment_code from experiments",
+        )?;
+
+        let mut vec = vec![];
+        for exp_info in stmt.query_map([], |row| {
+            Ok((
+                row.get(0).unwrap_or("".to_string()),
+                row.get(1).unwrap_or("".to_string()),
+                row.get(2).unwrap_or("".to_string()),
+            ))
+        })? {
+            let (exp_type, label, code) = exp_info.unwrap();
+            if let Ok(experiment) = self.get_linear_experiment(&exp_type) {
+                vec.push(LinearExperimentSet {
+                    experiment,
+                    label,
+                    code,
+                });
+            }
+        }
+
+        Ok(vec)
+    }
+
+    pub fn get_linear_experiment_handle(
+        &'a self,
+        exp_type: &str,
+    ) -> Result<LinearExperimentHandle<'a>> {
+        Ok(LinearExperimentHandle::new(
+            &self.db,
+            self.get_linear_experiment(exp_type)?,
+            self.get_linear_experiment_sets(exp_type)?,
+        )?)
+    }
+
+    pub fn get_linear_set_handle(&'a self, code: &str) -> Option<LinearSetHandle<'a>> {
+        self.get_linear_experiment_set(code)
+            .map(|exp_set| LinearSetHandle::new(&self.db, exp_set))
+            .ok()
+    }
+
+    fn get_xy_experiment(&self, exp_type: &str) -> Result<XYExperiment> {
+        Ok(self
+            .inner_config
+            .xy_experiments
+            .iter()
+            .find(|e| e.exp_type == exp_type)
+            .ok_or_else(|| {
+                BencherError::ExperimentNotFound(
+                    exp_type.to_string(),
+                    self.inner_config
+                        .xy_experiments
                         .iter()
                         .map(|e| e.exp_type.clone())
                         .collect::<Vec<_>>()
@@ -139,29 +249,48 @@ impl<'a> Config {
         Ok(vec)
     }
 
-    pub fn experiments(&self) -> Vec<XYExperiment> {
-        self.inner_config.experiments.clone()
+    pub fn xy_experiments(&self) -> Vec<XYExperiment> {
+        self.inner_config.xy_experiments.clone()
     }
 
-    pub fn experiment_lines(&self) -> Result<Vec<XYExperimentLine>> {
+    pub fn xy_experiment_lines(&self) -> Result<Vec<XYExperimentLine>> {
         let mut stmt = self.db.prepare(
             "select experiment_type, experiment_label, experiment_code from experiments",
         )?;
 
         let mut vec = vec![];
-        for line in stmt.query_map([], |row| {
-            let s = row.get(0).unwrap_or("".to_string());
-            let experiment = self.get_xy_experiment(&s).unwrap();
-            Ok(XYExperimentLine {
-                experiment,
-                label: row.get(1).unwrap_or("".to_string()),
-                code: row.get(2).unwrap_or("".to_string()),
-            })
+        for exp_info in stmt.query_map([], |row| {
+            Ok((
+                row.get(0).unwrap_or("".to_string()),
+                row.get(1).unwrap_or("".to_string()),
+                row.get(2).unwrap_or("".to_string()),
+            ))
         })? {
-            vec.push(line.unwrap());
+            let (exp_type, label, code) = exp_info.unwrap();
+            if let Ok(experiment) = self.get_xy_experiment(&exp_type) {
+                vec.push(XYExperimentLine {
+                    experiment,
+                    label,
+                    code,
+                });
+            }
         }
 
         Ok(vec)
+    }
+
+    pub fn get_xy_experiment_handle(&'a self, exp_type: &str) -> Result<XYExperimentHandle<'a>> {
+        Ok(XYExperimentHandle::new(
+            &self.db,
+            self.get_xy_experiment(exp_type)?,
+            self.get_xy_experiment_lines(exp_type)?,
+        )?)
+    }
+
+    pub fn get_xy_line_handle(&'a self, code: &str) -> Option<XYLineHandle<'a>> {
+        self.get_xy_experiment_line(code)
+            .map(|exp_line| XYLineHandle::new(&self.db, exp_line))
+            .ok()
     }
 
     pub fn status(&self) -> Result<Vec<ExperimentStatus>> {
@@ -185,7 +314,7 @@ impl<'a> Config {
 
         let mut stmt = self
             .db
-            .prepare("select experiment_code, count(*) from xy_results group by experiment_code")?;
+            .prepare("select experiment_code, count(*) from xy_results union select experiment_code, count(*) from linear_results group by experiment_code")?;
         for status in stmt.query_map([], |row| {
             Ok((
                 row.get(0).unwrap_or("".to_string()),
@@ -204,30 +333,589 @@ impl<'a> Config {
                 .map(|s| s.n_active_datapoints += 1);
         }
 
+        let mut stmt = self
+            .db
+            .prepare("select experiment_code, v_group, max(version) from linear_results group by experiment_code, v_group")?;
+        for code in stmt.query_map([], |row| Ok(row.get(0).unwrap_or("".to_string())))? {
+            map.get_mut(&code.unwrap())
+                .map(|s| s.n_active_datapoints += 1);
+        }
+
         Ok(map.into_iter().map(|(_, v)| v).collect())
     }
 
-    pub fn has_experiment(&self, exp_type: &str) -> bool {
+    pub fn has_xy_experiment(&self, exp_type: &str) -> bool {
         self.inner_config
-            .experiments
+            .xy_experiments
             .iter()
             .find(|e| e.exp_type == exp_type)
             .is_some()
     }
 
-    pub fn get_xy_experiment_handle(&'a self, exp_type: &str) -> Result<XYExperimentHandle<'a>> {
-        Ok(XYExperimentHandle::new(
-            &self.db,
-            self.get_xy_experiment(exp_type)?,
-            self.get_xy_experiment_lines(exp_type)?,
+    pub fn has_linear_experiment(&self, exp_type: &str) -> bool {
+        self.inner_config
+            .linear_experiments
+            .iter()
+            .find(|e| e.exp_type == exp_type)
+            .is_some()
+    }
+
+    pub fn has_experiment(&self, exp_type: &str) -> bool {
+        self.has_xy_experiment(exp_type) || self.has_linear_experiment(exp_type)
+    }
+}
+
+pub struct LinearExperimentHandle<'a> {
+    db: &'a rusqlite::Connection,
+    sets: Vec<LinearExperimentSet>,
+    horizontal_label: String,
+    v_label: String,
+    v_units: String,
+}
+
+pub struct LinearSetHandle<'a> {
+    db: &'a rusqlite::Connection,
+    experiment_set: LinearExperimentSet,
+}
+
+fn linear_datapoint_from_row(row: &rusqlite::Row) -> Result<LinearDatapoint, rusqlite::Error> {
+    fn create_confidence_arg(
+        min_int: Option<i64>,
+        max_int: Option<i64>,
+        min_float: Option<f64>,
+        max_float: Option<f64>,
+    ) -> Option<Either<(i64, i64), (f64, f64)>> {
+        if let (Some(lower), Some(upper)) = (min_int, max_int) {
+            Some(Either::Left((lower, upper)))
+        } else if let (Some(lower), Some(upper)) = (min_float, max_float) {
+            Some(Either::Right((lower, upper)))
+        } else {
+            None
+        }
+    }
+
+    let mut datapoint = LinearDatapoint::new(
+        row.get(0).unwrap(),
+        Value::new(row.get(1).unwrap(), row.get(2).unwrap())?,
+    );
+
+    // x 1 - 99
+    if let Some(e) = create_confidence_arg(
+        row.get(3).unwrap(),
+        row.get(4).unwrap(),
+        row.get(5).unwrap(),
+        row.get(6).unwrap(),
+    ) {
+        let _ = datapoint.add_confidence(1, e);
+    }
+
+    // x 5 - 95
+    if let Some(e) = create_confidence_arg(
+        row.get(7).unwrap(),
+        row.get(8).unwrap(),
+        row.get(9).unwrap(),
+        row.get(10).unwrap(),
+    ) {
+        let _ = datapoint.add_confidence(5, e);
+    }
+
+    // x 10 - 90
+    if let Some(e) = create_confidence_arg(
+        row.get(11).unwrap(),
+        row.get(12).unwrap(),
+        row.get(13).unwrap(),
+        row.get(14).unwrap(),
+    ) {
+        let _ = datapoint.add_confidence(10, e);
+    }
+
+    // x 25 - 75
+    if let Some(e) = create_confidence_arg(
+        row.get(15).unwrap(),
+        row.get(16).unwrap(),
+        row.get(17).unwrap(),
+        row.get(18).unwrap(),
+    ) {
+        let _ = datapoint.add_confidence(10, e);
+    }
+
+    Ok(datapoint)
+}
+
+fn get_linear_datapoints(db: &rusqlite::Connection, code: &str) -> Result<Vec<LinearDatapoint>> {
+    let mut stmt = db.prepare(
+        "select v_group, v_int, v_float,
+                v_int_1,    v_int_99,
+                v_float_1,  v_float_99,
+
+                v_int_5,    v_int_95,
+                v_float_5,  v_float_95,
+
+                v_int_10,   v_int_90,
+                v_float_10, v_float_90,
+
+                v_int_25,   v_int_75,
+                v_float_25, v_float_75,
+
+                max(version)
+         from linear_results
+         where experiment_code = :code
+         group by v_group
+         ",
+    )?;
+
+    let mut vec = vec![];
+    for datapoint in stmt.query_map(
+        rusqlite::named_params! { ":code": code },
+        linear_datapoint_from_row,
+    )? {
+        vec.push(datapoint?);
+    }
+
+    vec.sort_by_key(|d| d.group.clone());
+    Ok(vec)
+}
+
+impl<'a> LinearExperimentHandle<'a> {
+    fn new(
+        db: &'a rusqlite::Connection,
+        experiment: LinearExperiment,
+        sets: Vec<LinearExperimentSet>,
+    ) -> Result<Self, BencherError> {
+        if sets.len() == 0 {
+            Err(BencherError::NoLines(experiment.exp_type))
+        } else {
+            let v_label = experiment.v_label.clone();
+            let v_units = experiment.v_units.clone();
+            let horizontal_label = experiment.horizontal_label.clone();
+            Ok(Self {
+                db,
+                sets,
+                horizontal_label,
+                v_label,
+                v_units,
+            })
+        }
+    }
+
+    fn get_set_datapoints(&self) -> Result<BTreeMap<String, Vec<LinearDatapoint>>> {
+        let mut map = BTreeMap::new();
+        for exp in &self.sets {
+            let datapoints = get_linear_datapoints(self.db, &exp.code)?;
+            map.insert(exp.label.clone(), datapoints);
+        }
+
+        Ok(map)
+    }
+
+    /// This function returns a mapping from set_label -> datapoints and the magnitude to normalize
+    /// them with
+    fn get_set_datapoints_magnitude(
+        &self,
+    ) -> Result<(BTreeMap<String, Vec<LinearDatapoint>>, Magnitude)> {
+        let set_datapoints = self.get_set_datapoints()?;
+        let mut magnitude_counts = [0; 7];
+
+        set_datapoints.values().for_each(|v| {
+            v.iter().for_each(|d| match d.magnitude() {
+                Magnitude::Nano => magnitude_counts[0] += 1,
+                Magnitude::Micro => magnitude_counts[1] += 1,
+                Magnitude::Mili => magnitude_counts[2] += 1,
+                Magnitude::Normal => magnitude_counts[3] += 1,
+                Magnitude::Kilo => magnitude_counts[4] += 1,
+                Magnitude::Mega => magnitude_counts[5] += 1,
+                Magnitude::Giga => magnitude_counts[6] += 1,
+            })
+        });
+
+        let idx = magnitude_counts
+            .iter()
+            .enumerate()
+            .max_by_key(|v| v.1)
+            .map(|(idx, c)| if *c > 0 { idx } else { 3 })
+            .unwrap();
+
+        let mag = match idx {
+            0 => Magnitude::Nano,
+            1 => Magnitude::Micro,
+            2 => Magnitude::Mili,
+            3 => Magnitude::Normal,
+            4 => Magnitude::Kilo,
+            5 => Magnitude::Mega,
+            _ => Magnitude::Giga,
+        };
+
+        Ok((set_datapoints, mag))
+    }
+
+    pub fn dump_table(&self) -> Result<()> {
+        let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
+
+        for (label, datapoints) in set_datapoints {
+            println!(">> {} <<", label);
+            let table = datapoints
+                .into_iter()
+                .map(|d| {
+                    vec![
+                        d.group.cell().justify(Justify::Right),
+                        d.v.display_with_magnitude(mag)
+                            .cell()
+                            .justify(Justify::Right),
+                    ]
+                })
+                .collect::<Vec<_>>()
+                .table()
+                .title(vec![
+                    label.cell().justify(Justify::Center).bold(true),
+                    format!("{} ({}{})", self.v_label, mag.prefix(), self.v_units)
+                        .cell()
+                        .justify(Justify::Center)
+                        .bold(true),
+                ])
+                .bold(true);
+
+            cli_table::print_stdout(table)?;
+        }
+        Ok(())
+    }
+
+    pub fn dump_latex_table(&self) -> Result<()> {
+        let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
+        for (label, datapoints) in set_datapoints {
+            println!("\\begin{{table}}[t]\n    \\centering\n    \\begin{{tabular}}{{|r|r|}}\n        \\hline");
+            println!(
+                "        \\textbf{{ {} }} & \\textbf{{ {} ({}{}) }} \\\\ \\hline",
+                label,
+                self.v_label,
+                mag.prefix(),
+                self.v_units,
+            );
+            for d in datapoints {
+                println!(
+                    "        ${:>8}$ & ${:>8}$ \\\\ \\hline",
+                    d.group,
+                    d.v.display_with_magnitude(mag)
+                )
+            }
+            println!(
+                "    \\end{{tabular}}\n    \\caption{{Caption: {0}}}\\label{{table:{0}}}\n\\end{{table}}", label
+            );
+        }
+        Ok(())
+    }
+
+    pub fn dump_gnuplot(&self, prefix: &str, bar: bool) -> Result<()> {
+        let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
+        println!(
+            "reset
+
+set terminal postscript eps colour size 12cm,8cm enhanced font 'Helvetica,20'
+set output '{}.eps'
+
+set border linewidth 0.75
+set key outside above
+set style data histogram
+",
+            prefix
+        );
+
+        if bar {
+            println!("set style histogram cluster gap 1 errorbars lw 2");
+        } else {
+            println!("set style histogram cluster gap 1");
+        }
+
+        println!(
+            "
+# set axis
+set style fill pattern 4 border rgb \"black\"
+set auto x
+set yrange [0:*]
+set ylabel '{} ({}{})'
+",
+            self.v_label,
+            mag.prefix(),
+            self.v_units,
+        );
+
+        let n_sets = set_datapoints.len();
+
+        if bar {
+            println!(
+                "plot for [i=2:{}:3] '{}.dat' using i:i+1:i+2:xtic(1) title col(i)",
+                2 + 3 * (n_sets - 1),
+                prefix
+            );
+        } else {
+            println!(
+                "plot for [i=2:{}:1] '{}.dat' using i:xtic(1) title col(i)",
+                2 + n_sets - 1,
+                prefix
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn dump_dat(&self, prefix: &str, bar: Option<usize>) -> Result<()> {
+        let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
+
+        let mut file = File::create(format!("{}.dat", prefix))?;
+        let confidence_str = bar
+            .map(|c| {
+                format!(
+                    "confidence interval: {}% - {}%",
+                    std::cmp::min(c, 100 - c),
+                    std::cmp::max(c, 100 - c)
+                )
+            })
+            .unwrap_or("".to_owned());
+        writeln!(&mut file, "#begin {} {}", prefix, confidence_str)?;
+
+        // table: mapping from group to values, ordered by what it matters
+        let mut group_values = BTreeMap::new();
+
+        // header
+        write!(
+            &mut file,
+            "{:>34} ",
+            format!("\"{}\"", self.horizontal_label)
+        )?;
+
+        for (label, datapoints) in set_datapoints {
+            write!(&mut file, "{:>34} ", format!("\"{}\"", label))?;
+            if bar.is_some() {
+                write!(&mut file, "{:>34} ", "\"min\"")?;
+                write!(&mut file, "{:>34} ", "\"max\"")?;
+            }
+
+            for datapoint in datapoints {
+                let guard = group_values
+                    .entry(datapoint.group.clone())
+                    .or_insert(vec![]);
+                guard.push(datapoint.v.display_with_magnitude(mag));
+                if let Some(confidence) = bar {
+                    let (min, max) = datapoint
+                        .get_confidence(confidence)
+                        .unwrap_or((datapoint.v.clone(), datapoint.v.clone()));
+                    guard.push(min.display_with_magnitude(mag));
+                    guard.push(max.display_with_magnitude(mag));
+                }
+            }
+        }
+
+        for (group, values) in group_values {
+            write!(&mut file, "{:>34} ", format!("\"{}\"", group))?;
+            for v in values {
+                write!(&mut file, "{:>34} ", format!("\"{}\"", v))?;
+            }
+        }
+
+        writeln!(&mut file, "\n#end")?;
+        Ok(())
+    }
+}
+
+impl<'a> LinearSetHandle<'a> {
+    fn new(db: &'a rusqlite::Connection, experiment_set: LinearExperimentSet) -> Self {
+        Self { db, experiment_set }
+    }
+
+    pub fn label(&'a self) -> &'a str {
+        self.experiment_set.label.as_ref()
+    }
+
+    fn get_new_version(&self, datapoint: &LinearDatapoint) -> Result<isize> {
+        let new_version = self.db.query_row(
+                "select max(abs(version)) + 1 from linear_results where experiment_code = :code and v_group = :v_group",
+            rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": datapoint.group },
+            |row| Ok(row.get(0).unwrap_or(1)),
+        )?;
+
+        Ok(new_version)
+    }
+
+    pub fn add_datapoint(&self, datapoint: LinearDatapoint) -> Result<()> {
+        let version = self.get_new_version(&datapoint)?;
+        let mut stmt = self.db.prepare(
+            "insert into linear_results (
+                    experiment_code,
+                    version,
+                    v_group,
+
+                    v_int,
+                    v_int_1,
+                    v_int_5,
+                    v_int_10,
+                    v_int_25,
+                    v_int_99,
+                    v_int_95,
+                    v_int_90,
+                    v_int_75,
+
+                    v_float,
+                    v_float_1,
+                    v_float_5,
+                    v_float_10,
+                    v_float_25,
+                    v_float_99,
+                    v_float_95,
+                    v_float_90,
+                    v_float_75
+                ) values (
+                    :experiment_code,
+                    :version,
+                    :v_group,
+
+                    :v_int,
+                    :v_int_1,
+                    :v_int_5,
+                    :v_int_10,
+                    :v_int_25,
+                    :v_int_99,
+                    :v_int_95,
+                    :v_int_90,
+                    :v_int_75,
+
+                    :v_float,
+                    :v_float_1,
+                    :v_float_5,
+                    :v_float_10,
+                    :v_float_25,
+                    :v_float_99,
+                    :v_float_95,
+                    :v_float_90,
+                    :v_float_75
+                )",
+        )?;
+
+        stmt.execute(rusqlite::named_params! {
+            ":experiment_code": self.experiment_set.code,
+            ":v_group": datapoint.group,
+            ":version": version,
+
+            ":v_int": datapoint.v.to_int(),
+            ":v_float": datapoint.v.to_float(),
+
+            ":v_int_1": datapoint.get_confidence(1).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_99": datapoint.get_confidence(1).clone().map(|val| val.1.to_int()).flatten(),
+
+            ":v_int_5": datapoint.get_confidence(5).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_95": datapoint.get_confidence(5).clone().map(|val| val.1.to_int()).flatten(),
+
+            ":v_int_10": datapoint.get_confidence(10).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_90": datapoint.get_confidence(10).clone().map(|val| val.1.to_int()).flatten(),
+
+            ":v_int_25": datapoint.get_confidence(25).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_75": datapoint.get_confidence(25).clone().map(|val| val.1.to_int()).flatten(),
+
+            ":v_float_1": datapoint.get_confidence(1).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_99": datapoint.get_confidence(1).clone().map(|val| val.1.to_float()).flatten(),
+
+            ":v_float_5": datapoint.get_confidence(5).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_95": datapoint.get_confidence(5).clone().map(|val| val.1.to_float()).flatten(),
+
+            ":v_float_10": datapoint.get_confidence(10).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_90": datapoint.get_confidence(10).clone().map(|val| val.1.to_float()).flatten(),
+
+            ":v_float_25": datapoint.get_confidence(25).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_75": datapoint.get_confidence(25).clone().map(|val| val.1.to_float()).flatten(),
+        })?;
+        Ok(())
+    }
+
+    pub fn dump_raw(&self, group: &str) -> Result<()> {
+        let datapoint = self.db.query_row(
+            "select v_group, v_int, v_float,
+                v_int_1,    v_int_99,
+                v_float_1,  v_float_99,
+
+                v_int_5,    v_int_95,
+                v_float_5,  v_float_95,
+
+                v_int_10,   v_int_90,
+                v_float_10, v_float_90,
+
+                v_int_25,   v_int_75,
+                v_float_25, v_float_75,
+
+                max(version)
+         from linear_results
+         where experiment_code = :code and v_group = :v_group",
+            rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group },
+            linear_datapoint_from_row,
+        )?;
+
+        println!(
+            "{:>3}\t{}",
+            50,
+            datapoint.v.display_with_magnitude(Magnitude::Normal)
+        );
+        for confidence in &[1, 5, 10, 25] {
+            if let Some((min, max)) = datapoint.get_confidence(*confidence) {
+                println!(
+                    "{:>3}\t{}",
+                    confidence,
+                    min.display_with_magnitude(Magnitude::Normal)
+                );
+                println!(
+                    "{:>3}\t{}",
+                    100 - confidence,
+                    max.display_with_magnitude(Magnitude::Normal)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn version(&self, group: &str) -> Result<usize> {
+        Ok(self.db.query_row(
+            "select abs(max(version)) from linear_results where experiment_code = :code and v_group = :v_group",
+            rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group },
+            |row| row.get(0),
         )?)
     }
 
-    pub fn get_xy_line_handle(&'a self, code: &str) -> Option<XYLineHandle<'a>> {
-        self.get_xy_experiment_line(code)
-            .map(|exp_line| XYLineHandle::new(&self.db, exp_line))
-            .ok()
+    pub fn versions(&self, group: &str) -> Result<Vec<usize>> {
+        let mut stmt = self.db.prepare(
+            "select abs(version) from linear_results where experiment_code = :code and v_group = :v_group",
+        )?;
+
+        let result = stmt.query_map(
+            rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group },
+            |row| Ok(row.get(0).unwrap_or(0)),
+        )?;
+
+        Ok(result.into_iter().map(|x| x.unwrap()).collect())
     }
+
+    pub fn revert(&self, group: &str, version: Option<usize>) -> Result<()> {
+        if let Some(v) = version {
+            self.db.execute("update linear_results set version = abs(version) where experiment_code = :code and v_group = :v_group and abs(version) = :version",
+                            rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group, ":version": v})?;
+            self.db.execute("update linear_results set version = -version where experiment_code = :code and v_group = :v_group and version > :version",
+                            rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group, ":version": v})?;
+        } else {
+            self.db.execute("update linear_results set version = -version where experiment_code = :code and v_group = :v_group and version in
+                            (select max(version) from linear_results where experiment_code = :code and v_group = :v_group)",
+                            rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group })?;
+        }
+        Ok(())
+    }
+}
+
+pub struct XYExperimentHandle<'a> {
+    db: &'a rusqlite::Connection,
+    lines: Vec<XYExperimentLine>,
+    x_label: String,
+    x_units: String,
+    y_label: String,
+    y_units: String,
+}
+
+pub struct XYLineHandle<'a> {
+    db: &'a rusqlite::Connection,
+    experiment_line: XYExperimentLine,
 }
 
 fn xy_datapoint_from_row(row: &rusqlite::Row) -> Result<XYDatapoint, rusqlite::Error> {
@@ -686,7 +1374,7 @@ set yrange [*:*]
 
                 writeln!(&mut file, "")?;
             }
-            writeln!(&mut file, "# end")?;
+            writeln!(&mut file, "\n# end")?;
         }
         Ok(())
     }
@@ -963,7 +1651,7 @@ impl<'a> XYLineHandle<'a> {
 
     pub fn version(&self, tag: isize) -> Result<usize> {
         Ok(self.db.query_row(
-            "select max(version) from xy_results where experiment_code = :code and tag = :tag",
+            "select abs(max(version)) from xy_results where experiment_code = :code and tag = :tag",
             rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag },
             |row| row.get(0),
         )?)
@@ -1083,6 +1771,38 @@ fn setup_db(db: &rusqlite::Connection) -> Result<()> {
         )",
         [],
     )?;
+
+    db.execute(
+        "create table if not exists linear_results (
+            experiment_code text not null,
+            v_group text not null,
+            version int not null,
+
+            v_int int,
+            v_int_1 int,
+            v_int_5 int,
+            v_int_10 int,
+            v_int_25 int,
+            v_int_99 int,
+            v_int_95 int,
+            v_int_90 int,
+            v_int_75 int,
+
+            v_float float,
+            v_float_1 float,
+            v_float_5 float,
+            v_float_10 float,
+            v_float_25 float,
+            v_float_99 float,
+            v_float_95 float,
+            v_float_90 float,
+            v_float_75 float,
+
+            foreing key experiment_code references experiments,
+            primary key (experiment_code, v_group, version)
+        )",
+        [],
+    )?;
     Ok(())
 }
 
@@ -1091,7 +1811,7 @@ mod test {
     use super::*;
     use std::collections::HashSet;
 
-    fn gen_experiments() -> Vec<XYExperiment> {
+    fn gen_xy_experiments() -> Vec<XYExperiment> {
         vec![
             XYExperiment {
                 exp_type: "Throughput Latency".to_string(),
@@ -1110,10 +1830,28 @@ mod test {
         ]
     }
 
+    fn gen_linear_experiments() -> Vec<LinearExperiment> {
+        vec![
+            LinearExperiment {
+                exp_type: "Operational Latency".to_string(),
+                horizontal_label: "Operation".to_string(),
+                v_label: "Latency".to_string(),
+                v_units: "s".to_string(),
+            },
+            LinearExperiment {
+                exp_type: "Operational Throughput".to_string(),
+                horizontal_label: "Operation".to_string(),
+                v_label: "Throughput".to_string(),
+                v_units: "ops/s".to_string(),
+            },
+        ]
+    }
+
     fn gen_inner_config() -> BencherConfig {
         BencherConfig {
             database_filepath: "".to_string(),
-            experiments: gen_experiments(),
+            xy_experiments: gen_xy_experiments(),
+            linear_experiments: gen_linear_experiments(),
         }
     }
 
@@ -1133,10 +1871,19 @@ mod test {
         conf.add_xy_experiment("Throughput", "Version", "tput_version")
             .unwrap();
 
+        conf.add_linear_experiment("Operational Latency", "System A", "linear_lat_a")
+            .unwrap();
+        conf.add_linear_experiment("Operational Latency", "System B", "linear_lat_b")
+            .unwrap();
+        conf.add_linear_experiment("Operational Throughput", "System A", "linear_tput_a")
+            .unwrap();
+        conf.add_linear_experiment("Operational Throughput", "System B", "linear_tput_b")
+            .unwrap();
+
         conf
     }
 
-    fn populate(handle1: &XYLineHandle, handle2: &XYLineHandle) {
+    fn xy_populate(handle1: &XYLineHandle, handle2: &XYLineHandle) {
         for x in (0..=100).step_by(10) {
             let y = 100 - x;
             handle1
@@ -1148,10 +1895,18 @@ mod test {
         }
     }
 
+    fn linear_populate(handle: &LinearSetHandle, points: &[(&str, i64)]) {
+        for (label, value) in points {
+            handle
+                .add_datapoint(LinearDatapoint::new(label.to_string(), Value::Int(*value)))
+                .unwrap();
+        }
+    }
+
     #[test]
     fn config_experiments() {
         let config = gen_in_memory_config();
-        assert_eq!(config.experiments(), gen_experiments());
+        assert_eq!(config.xy_experiments(), gen_xy_experiments());
     }
 
     #[test]
@@ -1188,6 +1943,34 @@ mod test {
                     n_datapoints: 0,
                     n_active_datapoints: 0,
                 },
+                ExperimentStatus {
+                    code: "linear_lat_a".to_string(),
+                    exp_type: "Operational Latency".to_string(),
+                    label: "System A".to_string(),
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
+                },
+                ExperimentStatus {
+                    code: "linear_lat_b".to_string(),
+                    exp_type: "Operational Latency".to_string(),
+                    label: "System B".to_string(),
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
+                },
+                ExperimentStatus {
+                    code: "linear_tput_a".to_string(),
+                    exp_type: "Operational Throughput".to_string(),
+                    label: "System A".to_string(),
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
+                },
+                ExperimentStatus {
+                    code: "linear_tput_b".to_string(),
+                    exp_type: "Operational Throughput".to_string(),
+                    label: "System B".to_string(),
+                    n_datapoints: 0,
+                    n_active_datapoints: 0,
+                },
             ]
             .into_iter()
             .collect::<HashSet<_>>()
@@ -1195,28 +1978,198 @@ mod test {
     }
 
     #[test]
-    fn config_get_handle() {
+    fn linear_config_get_handle() {
+        let config = gen_in_memory_config();
+        assert_eq!(config.has_experiment("Non-operational Latency"), false);
+        assert_eq!(
+            config.has_linear_experiment("Non-operational Latency"),
+            false
+        );
+        assert!(config
+            .get_linear_experiment_handle("Non-operational Latency")
+            .is_err());
+        assert_eq!(config.has_experiment("Operational Latency"), true);
+        assert_eq!(config.has_linear_experiment("Operational Latency"), true);
+        assert_eq!(config.has_xy_experiment("Operational Latency"), false);
+        assert!(config
+            .get_linear_experiment_handle("Operational Latency")
+            .is_ok());
+        assert_eq!(config.has_experiment("Operational Throughput"), true);
+        assert_eq!(config.has_xy_experiment("Operational Throughput"), false);
+        assert!(config
+            .get_linear_experiment_handle("Operational Throughput")
+            .is_ok());
+    }
+
+    #[test]
+    fn linear_can_populate() {
+        let config = gen_in_memory_config();
+        let handle_a = config.get_linear_set_handle("linear_lat_a").unwrap();
+        let handle_b = config.get_linear_set_handle("linear_lat_b").unwrap();
+        linear_populate(&handle_a, &[("get", 12), ("put", 42)]);
+        linear_populate(&handle_b, &[("get", 6), ("put", 20)]);
+    }
+
+    #[test]
+    fn linear_can_get() {
+        let config = gen_in_memory_config();
+        let handle_a = config.get_linear_set_handle("linear_lat_a").unwrap();
+        let handle_b = config.get_linear_set_handle("linear_lat_b").unwrap();
+        linear_populate(&handle_a, &[("get", 12), ("put", 42)]);
+        linear_populate(&handle_b, &[("get", 6), ("put", 20)]);
+
+        let handle = config
+            .get_linear_experiment_handle("Operational Latency")
+            .unwrap();
+
+        let datapoints = handle.get_set_datapoints().unwrap();
+
+        assert_eq!(datapoints.len(), 2);
+        eprintln!("{:#?}", datapoints);
+        assert_eq!(
+            datapoints["System A"],
+            vec![
+                LinearDatapoint::new("get".to_string(), Value::Int(12)),
+                LinearDatapoint::new("put".to_string(), Value::Int(42))
+            ]
+        );
+        assert_eq!(
+            datapoints["System B"],
+            vec![
+                LinearDatapoint::new("get".to_string(), Value::Int(6)),
+                LinearDatapoint::new("put".to_string(), Value::Int(20))
+            ]
+        );
+
+        let (datapoints, mag) = handle.get_set_datapoints_magnitude().unwrap();
+        assert_eq!(datapoints.len(), 2);
+        assert_eq!(
+            datapoints["System A"],
+            vec![
+                LinearDatapoint::new("get".to_string(), Value::Int(12)),
+                LinearDatapoint::new("put".to_string(), Value::Int(42))
+            ]
+        );
+        assert_eq!(
+            datapoints["System B"],
+            vec![
+                LinearDatapoint::new("get".to_string(), Value::Int(6)),
+                LinearDatapoint::new("put".to_string(), Value::Int(20))
+            ]
+        );
+        assert_eq!(mag, Magnitude::Normal);
+    }
+
+    #[test]
+    fn linear_versions() {
+        fn gen_datapoint(group: &str, v: i64) -> LinearDatapoint {
+            LinearDatapoint::new(group.to_string(), Value::Int(v))
+        }
+
+        let config = gen_in_memory_config();
+
+        let handle_a = config.get_linear_set_handle("linear_tput_a").unwrap();
+        let handle = config
+            .get_linear_experiment_handle("Operational Throughput")
+            .unwrap();
+
+        assert!(handle_a.version("get").is_err());
+
+        handle_a.add_datapoint(gen_datapoint("get", 1)).unwrap();
+        assert_eq!(
+            handle.get_set_datapoints().unwrap()["System A"][0],
+            gen_datapoint("get", 1)
+        );
+        assert_eq!(handle_a.version("get").unwrap(), 1);
+        let mut versions = handle_a.versions("get").unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1]);
+
+        handle_a.add_datapoint(gen_datapoint("get", 2)).unwrap();
+        assert_eq!(
+            handle.get_set_datapoints().unwrap()["System A"][0],
+            gen_datapoint("get", 2)
+        );
+        assert_eq!(handle_a.version("get").unwrap(), 2);
+        let mut versions = handle_a.versions("get").unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2]);
+
+        handle_a.revert("get", None).unwrap();
+        assert_eq!(
+            handle.get_set_datapoints().unwrap()["System A"][0],
+            gen_datapoint("get", 1)
+        );
+        assert_eq!(handle_a.version("get").unwrap(), 1);
+        let mut versions = handle_a.versions("get").unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2]);
+
+        handle_a.add_datapoint(gen_datapoint("get", 3)).unwrap();
+        assert_eq!(
+            handle.get_set_datapoints().unwrap()["System A"][0],
+            gen_datapoint("get", 3)
+        );
+        assert_eq!(handle_a.version("get").unwrap(), 3);
+        let mut versions = handle_a.versions("get").unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2, 3]);
+
+        handle_a.revert("get", Some(1)).unwrap();
+        assert_eq!(
+            handle.get_set_datapoints().unwrap()["System A"][0],
+            gen_datapoint("get", 1)
+        );
+        assert_eq!(handle_a.version("get").unwrap(), 1);
+        let mut versions = handle_a.versions("get").unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2, 3]);
+
+        handle_a.revert("get", Some(2)).unwrap();
+        assert_eq!(
+            handle.get_set_datapoints().unwrap()["System A"][0],
+            gen_datapoint("get", 2)
+        );
+        assert_eq!(handle_a.version("get").unwrap(), 2);
+        let mut versions = handle_a.versions("get").unwrap();
+        versions.sort();
+        assert_eq!(versions, vec![1, 2, 3]);
+
+        handle_a.revert("get", Some(3)).unwrap();
+        assert_eq!(
+            handle.get_set_datapoints().unwrap()["System A"][0],
+            gen_datapoint("get", 3)
+        );
+        assert_eq!(handle_a.version("get").unwrap(), 3);
+        assert_eq!(handle_a.versions("get").unwrap(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn xy_config_get_handle() {
         let config = gen_in_memory_config();
         assert_eq!(config.has_experiment("Latency"), false);
+        assert_eq!(config.has_xy_experiment("Latency"), false);
         assert!(config.get_xy_experiment_handle("Latency").is_err());
         assert_eq!(config.has_experiment("Throughput"), true);
+        assert_eq!(config.has_xy_experiment("Throughput"), true);
+        assert_eq!(config.has_linear_experiment("Throughput"), false);
         assert!(config.get_xy_experiment_handle("Throughput").is_ok());
     }
 
     #[test]
-    fn can_populate() {
+    fn xy_can_populate() {
         let config = gen_in_memory_config();
         let handle1 = config.get_xy_line_handle("tput_1").unwrap();
         let handle2 = config.get_xy_line_handle("tput_2").unwrap();
-        populate(&handle1, &handle2);
+        xy_populate(&handle1, &handle2);
     }
 
     #[test]
-    fn can_get() {
+    fn xy_can_get() {
         let config = gen_in_memory_config();
         let handle1 = config.get_xy_line_handle("tput_1").unwrap();
         let handle2 = config.get_xy_line_handle("tput_2").unwrap();
-        populate(&handle1, &handle2);
+        xy_populate(&handle1, &handle2);
 
         let handle = config.get_xy_experiment_handle("Throughput").unwrap();
 
@@ -1263,7 +2216,7 @@ mod test {
     }
 
     #[test]
-    fn versions() {
+    fn xy_versions() {
         fn gen_datapoint(v: i64) -> XYDatapoint {
             XYDatapoint::new(Value::Int(v), Value::Int(v)).tag(42)
         }

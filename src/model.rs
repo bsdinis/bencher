@@ -136,6 +136,71 @@ impl Value {
     }
 }
 
+/// A Linear datapoint represents a single column in a histogram
+/// The group is the label of the histogram group
+///
+/// Example: if the histogram is latency per operation,
+/// and there are two labels (A and B) and two operations (get and put),
+/// there are 4 datapoints
+///
+/// A/get
+/// A/put
+/// B/get
+/// B/put
+///
+/// the groups are put/get
+#[derive(Debug, PartialEq, Clone)]
+pub struct LinearDatapoint {
+    pub group: String,
+
+    pub v: Value,
+
+    pub v_confidence: BTreeMap<Confidence, (Value, Value)>,
+}
+
+impl LinearDatapoint {
+    pub fn new(group: String, v: Value) -> Self {
+        LinearDatapoint {
+            group,
+            v,
+            v_confidence: BTreeMap::new(),
+        }
+    }
+
+    pub fn magnitude(&self) -> Magnitude {
+        self.v.magnitude()
+    }
+
+    pub fn add_confidence(
+        &mut self,
+        confidence: usize,
+        values: Either<(i64, i64), (f64, f64)>,
+    ) -> Result<(), BencherError> {
+        let confidence = Confidence::new(confidence)?;
+        if self.v.is_int() {
+            if let Either::Left((lower, upper)) = values {
+                self.v_confidence
+                    .insert(confidence, (Value::Int(lower), Value::Int(upper)));
+            } else {
+                Err(BencherError::MismatchedTypes)?;
+            }
+        } else {
+            if let Either::Right((lower, upper)) = values {
+                self.v_confidence
+                    .insert(confidence, (Value::Float(lower), Value::Float(upper)));
+            } else {
+                Err(BencherError::MismatchedTypes)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_confidence(&self, confidence: usize) -> Option<(Value, Value)> {
+        let confidence = Confidence::new(confidence).ok()?;
+        self.v_confidence.get(&confidence).cloned()
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct XYDatapoint {
     pub x: Value,
@@ -228,6 +293,31 @@ impl XYDatapoint {
     }
 }
 
+/// A linear experiment represents a histogram
+///
+/// The group labels are the labels to be used of the groups in the histogram.
+/// Example: if the histogram is latency per operation,
+/// and there are two labels (A and B) and two operations (get and put),
+/// the groups are put/get
+#[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
+pub struct LinearExperiment {
+    pub exp_type: String,
+    pub horizontal_label: String,
+    pub v_label: String,
+    pub v_units: String,
+}
+
+/// A linear experiment set represents all the groups under a label
+///
+/// Example: if the histogram is latency per operation,
+/// and there are two labels (A and B) and two operations (get and put),
+/// the sets are A (with A/get and A/put) and B (with B/get and B/put)
+pub struct LinearExperimentSet {
+    pub experiment: LinearExperiment,
+    pub label: String,
+    pub code: String,
+}
+
 #[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct XYExperiment {
     pub exp_type: String,
@@ -252,13 +342,16 @@ pub struct ExperimentStatus {
     pub n_active_datapoints: usize,
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 pub struct BencherConfig {
     /// database filepath relative to the config filepath
     pub database_filepath: String,
 
     /// experiment descriptions
-    pub experiments: Vec<XYExperiment>,
+    pub xy_experiments: Vec<XYExperiment>,
+
+    /// experiment descriptions
+    pub linear_experiments: Vec<LinearExperiment>,
 }
 
 #[cfg(test)]
@@ -353,7 +446,38 @@ mod test {
     }
 
     #[test]
-    fn datapoint_tag() {
+    fn linear_datapoint_magnitudes() {
+        assert_eq!(
+            LinearDatapoint::new("".to_owned(), Value::Int(50_000_000)).magnitude(),
+            Magnitude::Mega
+        );
+        assert_eq!(
+            LinearDatapoint::new("".to_owned(), Value::Float(0.00005)).magnitude(),
+            Magnitude::Micro
+        );
+    }
+
+    #[test]
+    fn linear_datapoint_confidence() {
+        assert!(LinearDatapoint::new("".to_owned(), Value::Int(0))
+            .add_confidence(0, Either::Left((0, 0)))
+            .is_err());
+        assert!(LinearDatapoint::new("".to_owned(), Value::Int(0))
+            .add_confidence(1, Either::Left((0, 0)))
+            .is_ok());
+        assert!(LinearDatapoint::new("".to_owned(), Value::Int(0))
+            .add_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
+            .is_err());
+        assert!(LinearDatapoint::new("".to_owned(), Value::Float(0.0))
+            .add_confidence(1, Either::Left((0, 0)))
+            .is_err());
+        assert!(LinearDatapoint::new("".to_owned(), Value::Float(0.0))
+            .add_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
+            .is_ok());
+    }
+
+    #[test]
+    fn xy_datapoint_tag() {
         assert_eq!(XYDatapoint::new(Value::Int(0), Value::Int(0)).tag, None);
         assert_eq!(
             XYDatapoint::new(Value::Int(0), Value::Int(0)).tag(42).tag,
@@ -362,7 +486,7 @@ mod test {
     }
 
     #[test]
-    fn datapoint_magnitudes() {
+    fn xy_datapoint_magnitudes() {
         assert_eq!(
             XYDatapoint::new(Value::Int(50_000_000), Value::Float(0.00005)).magnitudes(),
             (Magnitude::Mega, Magnitude::Micro)
@@ -370,7 +494,7 @@ mod test {
     }
 
     #[test]
-    fn datapoint_confidence() {
+    fn xy_datapoint_confidence() {
         assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
             .add_x_confidence(0, Either::Left((0, 0)))
             .is_err());

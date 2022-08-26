@@ -2,6 +2,7 @@ use either::Either;
 use std::collections::BTreeMap;
 
 use crate::error::*;
+use crate::stat::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Magnitude {
@@ -159,12 +160,58 @@ pub struct LinearDatapoint {
 }
 
 impl LinearDatapoint {
-    pub fn new(group: String, v: Value) -> Self {
+    pub fn new(group: impl Into<String>, v: Value) -> Self {
         LinearDatapoint {
-            group,
+            group: group.into(),
             v,
             v_confidence: BTreeMap::new(),
         }
+    }
+
+    pub fn from_sample_i64(
+        group: impl Into<String>,
+        sample: &mut Vec<i64>,
+    ) -> Result<Option<Self>, BencherError> {
+        if sample.len() == 0 {
+            return Ok(None);
+        }
+        sample.sort_unstable();
+        let mut datapoint = LinearDatapoint::new(group, Value::Int(integer_median(&sample)));
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (lower, upper) = (
+                integer_percentile(&sample, *confidence),
+                integer_percentile(&sample, 100 - *confidence),
+            );
+            datapoint
+                .add_confidence(*confidence, Either::Left((lower, upper)))
+                .expect("Unexpected type mismatch");
+        }
+
+        Ok(Some(datapoint))
+    }
+
+    pub fn from_sample_f64(
+        group: impl Into<String>,
+        sample: &mut Vec<f64>,
+    ) -> Result<Option<Self>, BencherError> {
+        if sample.len() == 0 {
+            return Ok(None);
+        }
+        sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut datapoint = LinearDatapoint::new(group, Value::Float(float_median(&sample)));
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (lower, upper) = (
+                float_percentile(&sample, *confidence),
+                float_percentile(&sample, 100 - *confidence),
+            );
+            datapoint
+                .add_confidence(*confidence, Either::Right((lower, upper)))
+                .expect("Unexpected type mismatch");
+        }
+
+        Ok(Some(datapoint))
     }
 
     pub fn magnitude(&self) -> Magnitude {
@@ -222,6 +269,138 @@ impl XYDatapoint {
             x_confidence: BTreeMap::new(),
             y_confidence: BTreeMap::new(),
             tag: None,
+        }
+    }
+
+    fn from_samples_i64_i64(x_sample: &mut Vec<i64>, y_sample: &mut Vec<i64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable();
+        y_sample.sort_unstable();
+        let mut datapoint = XYDatapoint::new(
+            Value::Int(integer_median(&x_sample)),
+            Value::Int(integer_median(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                integer_percentile(&x_sample, *confidence),
+                integer_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                integer_percentile(&y_sample, *confidence),
+                integer_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    fn from_samples_i64_f64(x_sample: &mut Vec<i64>, y_sample: &mut Vec<f64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable();
+        y_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut datapoint = XYDatapoint::new(
+            Value::Int(integer_median(&x_sample)),
+            Value::Float(float_median(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                integer_percentile(&x_sample, *confidence),
+                integer_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                float_percentile(&y_sample, *confidence),
+                float_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    fn from_samples_f64_i64(x_sample: &mut Vec<f64>, y_sample: &mut Vec<i64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        y_sample.sort_unstable();
+        let mut datapoint = XYDatapoint::new(
+            Value::Float(float_median(&x_sample)),
+            Value::Int(integer_median(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                float_percentile(&x_sample, *confidence),
+                float_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                integer_percentile(&y_sample, *confidence),
+                integer_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    fn from_samples_f64_f64(x_sample: &mut Vec<f64>, y_sample: &mut Vec<f64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        y_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut datapoint = XYDatapoint::new(
+            Value::Float(float_median(&x_sample)),
+            Value::Float(float_median(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                float_percentile(&x_sample, *confidence),
+                float_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                float_percentile(&y_sample, *confidence),
+                float_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    pub fn from_samples(
+        x_sample: Either<&mut Vec<i64>, &mut Vec<f64>>,
+        y_sample: Either<&mut Vec<i64>, &mut Vec<f64>>,
+    ) -> Option<Self> {
+        match (x_sample, y_sample) {
+            (Either::Left(x), Either::Left(y)) => Self::from_samples_i64_i64(x, y),
+            (Either::Left(x), Either::Right(y)) => Self::from_samples_i64_f64(x, y),
+            (Either::Right(x), Either::Left(y)) => Self::from_samples_f64_i64(x, y),
+            (Either::Right(x), Either::Right(y)) => Self::from_samples_f64_f64(x, y),
         }
     }
 
@@ -448,32 +627,60 @@ mod test {
     #[test]
     fn linear_datapoint_magnitudes() {
         assert_eq!(
-            LinearDatapoint::new("".to_owned(), Value::Int(50_000_000)).magnitude(),
+            LinearDatapoint::new("", Value::Int(50_000_000)).magnitude(),
             Magnitude::Mega
         );
         assert_eq!(
-            LinearDatapoint::new("".to_owned(), Value::Float(0.00005)).magnitude(),
+            LinearDatapoint::new("", Value::Float(0.00005)).magnitude(),
             Magnitude::Micro
         );
     }
 
     #[test]
     fn linear_datapoint_confidence() {
-        assert!(LinearDatapoint::new("".to_owned(), Value::Int(0))
+        assert!(LinearDatapoint::new("", Value::Int(0))
             .add_confidence(0, Either::Left((0, 0)))
             .is_err());
-        assert!(LinearDatapoint::new("".to_owned(), Value::Int(0))
+        assert!(LinearDatapoint::new("", Value::Int(0))
             .add_confidence(1, Either::Left((0, 0)))
             .is_ok());
-        assert!(LinearDatapoint::new("".to_owned(), Value::Int(0))
+        assert!(LinearDatapoint::new("", Value::Int(0))
             .add_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_err());
-        assert!(LinearDatapoint::new("".to_owned(), Value::Float(0.0))
+        assert!(LinearDatapoint::new("", Value::Float(0.0))
             .add_confidence(1, Either::Left((0, 0)))
             .is_err());
-        assert!(LinearDatapoint::new("".to_owned(), Value::Float(0.0))
+        assert!(LinearDatapoint::new("", Value::Float(0.0))
             .add_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_ok());
+    }
+
+    #[test]
+    fn linear_datapoint_from_sample_i64() {
+        assert!(LinearDatapoint::from_sample_i64("", &mut vec![])
+            .unwrap()
+            .is_none());
+        let mut sample: Vec<i64> = (0..100).into_iter().collect();
+        let datapoint = LinearDatapoint::from_sample_i64("", &mut sample)
+            .unwrap()
+            .unwrap();
+        assert_eq!(datapoint.v, Value::Int(49));
+        assert_eq!(
+            datapoint.get_confidence(1),
+            Some((Value::Int(1), Value::Int(99)))
+        );
+        assert_eq!(
+            datapoint.get_confidence(5),
+            Some((Value::Int(5), Value::Int(95)))
+        );
+        assert_eq!(
+            datapoint.get_confidence(10),
+            Some((Value::Int(10), Value::Int(90)))
+        );
+        assert_eq!(
+            datapoint.get_confidence(25),
+            Some((Value::Int(25), Value::Int(75)))
+        );
     }
 
     #[test]
@@ -523,5 +730,60 @@ mod test {
         assert!(XYDatapoint::new(Value::Int(0), Value::Float(0.0))
             .add_y_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
             .is_ok());
+    }
+
+    #[test]
+    fn xy_datapoint_from_sample_i64() {
+        assert!(
+            XYDatapoint::from_samples(Either::Left(&mut vec![]), Either::Left(&mut vec![]))
+                .is_none()
+        );
+        assert!(
+            XYDatapoint::from_samples(Either::Left(&mut vec![1]), Either::Left(&mut vec![]))
+                .is_none()
+        );
+        assert!(
+            XYDatapoint::from_samples(Either::Left(&mut vec![]), Either::Left(&mut vec![1]))
+                .is_none()
+        );
+        let mut x_sample: Vec<i64> = (0..100).into_iter().collect();
+        let mut y_sample: Vec<i64> = (1000..1100).rev().into_iter().collect();
+        let datapoint =
+            XYDatapoint::from_samples(Either::Left(&mut x_sample), Either::Left(&mut y_sample))
+                .unwrap();
+        assert_eq!(datapoint.x, Value::Int(49));
+        assert_eq!(datapoint.y, Value::Int(1049));
+        assert_eq!(
+            datapoint.get_x_confidence(1),
+            Some((Value::Int(1), Value::Int(99)))
+        );
+        assert_eq!(
+            datapoint.get_x_confidence(5),
+            Some((Value::Int(5), Value::Int(95)))
+        );
+        assert_eq!(
+            datapoint.get_x_confidence(10),
+            Some((Value::Int(10), Value::Int(90)))
+        );
+        assert_eq!(
+            datapoint.get_x_confidence(25),
+            Some((Value::Int(25), Value::Int(75)))
+        );
+        assert_eq!(
+            datapoint.get_y_confidence(1),
+            Some((Value::Int(1001), Value::Int(1099)))
+        );
+        assert_eq!(
+            datapoint.get_y_confidence(5),
+            Some((Value::Int(1005), Value::Int(1095)))
+        );
+        assert_eq!(
+            datapoint.get_y_confidence(10),
+            Some((Value::Int(1010), Value::Int(1090)))
+        );
+        assert_eq!(
+            datapoint.get_y_confidence(25),
+            Some((Value::Int(1025), Value::Int(1075)))
+        );
     }
 }

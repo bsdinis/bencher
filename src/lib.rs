@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 mod error;
 mod model;
+mod stat;
 
 pub use error::*;
 pub use model::*;
@@ -395,7 +396,7 @@ fn linear_datapoint_from_row(row: &rusqlite::Row) -> Result<LinearDatapoint, rus
     }
 
     let mut datapoint = LinearDatapoint::new(
-        row.get(0).unwrap(),
+        row.get::<usize, String>(0).unwrap(),
         Value::new(row.get(1).unwrap(), row.get(2).unwrap())?,
     );
 
@@ -705,9 +706,9 @@ set ylabel '{} ({}{})'
         }
 
         for (group, values) in group_values {
-            write!(&mut file, "{:>34} ", format!("\"{}\"", group))?;
+            write!(&mut file, "\n{:>34} ", format!("\"{}\"", group))?;
             for v in values {
-                write!(&mut file, "{:>34} ", format!("\"{}\"", v))?;
+                write!(&mut file, "{:>34} ", v)?;
             }
         }
 

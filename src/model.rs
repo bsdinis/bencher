@@ -55,6 +55,25 @@ pub enum Value {
     Float(f64),
 }
 
+impl std::cmp::PartialOrd for Value {
+    fn partial_cmp(&self, other: &Value) -> Option<std::cmp::Ordering> {
+        match (self, other) {
+            (Value::Int(a), Value::Int(b)) => a.partial_cmp(b),
+            (Value::Int(a), Value::Float(b)) => (&(*a as f64)).partial_cmp(b),
+            (Value::Float(a), Value::Int(b)) => a.partial_cmp(&(*b as f64)),
+            (Value::Float(a), Value::Float(b)) => a.partial_cmp(b),
+        }
+    }
+}
+
+impl std::cmp::Eq for Value {}
+
+impl std::cmp::Ord for Value {
+    fn cmp(&self, other: &Value) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
 impl Value {
     pub fn new(i: Option<i64>, f: Option<f64>) -> Result<Self, BencherError> {
         match (i, f) {
@@ -811,8 +830,12 @@ mod test {
             XYDatapoint::from_samples(Either::Left(&mut x_sample), Either::Left(&mut y_sample))
                 .unwrap();
 
-        let x_datapoint = LinearDatapoint::from_sample_i64("", &mut x_sample).unwrap().unwrap();
-        let y_datapoint = LinearDatapoint::from_sample_i64("", &mut y_sample).unwrap().unwrap();
+        let x_datapoint = LinearDatapoint::from_sample_i64("", &mut x_sample)
+            .unwrap()
+            .unwrap();
+        let y_datapoint = LinearDatapoint::from_sample_i64("", &mut y_sample)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(x_datapoint, datapoint.x_linear(""));
         assert_eq!(y_datapoint, datapoint.y_linear(""));

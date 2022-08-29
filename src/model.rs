@@ -272,6 +272,22 @@ impl XYDatapoint {
         }
     }
 
+    pub fn x_linear(&self, group: impl Into<String>) -> LinearDatapoint {
+        LinearDatapoint {
+            group: group.into(),
+            v: self.x.clone(),
+            v_confidence: self.x_confidence.clone(),
+        }
+    }
+
+    pub fn y_linear(&self, group: impl Into<String>) -> LinearDatapoint {
+        LinearDatapoint {
+            group: group.into(),
+            v: self.y.clone(),
+            v_confidence: self.y_confidence.clone(),
+        }
+    }
+
     fn from_samples_i64_i64(x_sample: &mut Vec<i64>, y_sample: &mut Vec<i64>) -> Option<Self> {
         if x_sample.len() == 0 || y_sample.len() == 0 {
             return None;
@@ -785,5 +801,20 @@ mod test {
             datapoint.get_y_confidence(25),
             Some((Value::Int(1025), Value::Int(1075)))
         );
+    }
+
+    #[test]
+    fn linear_datapoint_from_xy_datapoint() {
+        let mut x_sample: Vec<i64> = (0..100).into_iter().collect();
+        let mut y_sample: Vec<i64> = (1000..1100).rev().into_iter().collect();
+        let datapoint =
+            XYDatapoint::from_samples(Either::Left(&mut x_sample), Either::Left(&mut y_sample))
+                .unwrap();
+
+        let x_datapoint = LinearDatapoint::from_sample_i64("", &mut x_sample).unwrap().unwrap();
+        let y_datapoint = LinearDatapoint::from_sample_i64("", &mut y_sample).unwrap().unwrap();
+
+        assert_eq!(x_datapoint, datapoint.x_linear(""));
+        assert_eq!(y_datapoint, datapoint.y_linear(""));
     }
 }

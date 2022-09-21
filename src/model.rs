@@ -55,6 +55,15 @@ pub enum Value {
     Float(f64),
 }
 
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Value::Int(v) => write!(f, "{}", v),
+            Value::Float(v) => write!(f, "{}", v),
+        }
+    }
+}
+
 impl std::cmp::PartialOrd for Value {
     fn partial_cmp(&self, other: &Value) -> Option<std::cmp::Ordering> {
         match (self, other) {
@@ -264,6 +273,18 @@ impl LinearDatapoint {
     pub fn get_confidence(&self, confidence: usize) -> Option<(Value, Value)> {
         let confidence = Confidence::new(confidence).ok()?;
         self.v_confidence.get(&confidence).cloned()
+    }
+}
+
+impl std::fmt::Display for LinearDatapoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        for c in [5, 10, 25, 1] {
+            if let Some((min, max)) = self.v_confidence.get(&Confidence::new(c).unwrap()) {
+                return write!(f, "{}: {} ([{};{}])", self.group, self.v, min, max);
+            }
+        }
+
+        write!(f, "{}: {}", self.group, self.v)
     }
 }
 
@@ -504,6 +525,47 @@ impl XYDatapoint {
     pub fn get_y_confidence(&self, confidence: usize) -> Option<(Value, Value)> {
         let confidence = Confidence::new(confidence).ok()?;
         self.y_confidence.get(&confidence).cloned()
+    }
+}
+
+impl std::fmt::Display for XYDatapoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let x_interval = {
+            let mut interval = None;
+            for c in [5, 10, 25, 1] {
+                if let Some((min, max)) = self.x_confidence.get(&Confidence::new(c).unwrap()) {
+                    interval = Some((min, max));
+                    break;
+                }
+            }
+            interval
+        };
+
+        let y_interval = {
+            let mut interval = None;
+            for c in [5, 10, 25, 1] {
+                if let Some((min, max)) = self.y_confidence.get(&Confidence::new(c).unwrap()) {
+                    interval = Some((min, max));
+                    break;
+                }
+            }
+            interval
+        };
+
+        match (x_interval, y_interval) {
+            (None, None) => write!(f, "({}, {})", self.x, self.y),
+            (Some((x_min, x_max)), None) => {
+                write!(f, "({} [{};{}], {})", self.x, x_min, x_max, self.y)
+            }
+            (None, Some((y_min, y_max))) => {
+                write!(f, "({}, {} [{};{}])", self.x, self.y, y_min, y_max)
+            }
+            (Some((x_min, x_max)), Some((y_min, y_max))) => write!(
+                f,
+                "({} [{};{}], {} [{};{}])",
+                self.x, x_min, x_max, self.y, y_min, y_max
+            ),
+        }
     }
 }
 

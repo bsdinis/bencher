@@ -552,18 +552,30 @@ impl std::fmt::Display for XYDatapoint {
             interval
         };
 
-        match (x_interval, y_interval) {
-            (None, None) => write!(f, "({}, {})", self.x, self.y),
-            (Some((x_min, x_max)), None) => {
-                write!(f, "({} [{};{}], {})", self.x, x_min, x_max, self.y)
+        match (self.tag, x_interval, y_interval) {
+            (None, None, None) => write!(f, "[]({}, {})", self.x, self.y),
+            (None, Some((x_min, x_max)), None) => {
+                write!(f, "[]({} [{};{}], {})", self.x, x_min, x_max, self.y)
             }
-            (None, Some((y_min, y_max))) => {
-                write!(f, "({}, {} [{};{}])", self.x, self.y, y_min, y_max)
+            (None, None, Some((y_min, y_max))) => {
+                write!(f, "[]({}, {} [{};{}])", self.x, self.y, y_min, y_max)
             }
-            (Some((x_min, x_max)), Some((y_min, y_max))) => write!(
+            (None, Some((x_min, x_max)), Some((y_min, y_max))) => write!(
                 f,
-                "({} [{};{}], {} [{};{}])",
+                "[]({} [{};{}], {} [{};{}])",
                 self.x, x_min, x_max, self.y, y_min, y_max
+            ),
+            (Some(tag), None, None) => write!(f, "[{}]({}, {})", tag, self.x, self.y),
+            (Some(tag), Some((x_min, x_max)), None) => {
+                write!(f, "[{}]({} [{};{}], {})", tag, self.x, x_min, x_max, self.y)
+            }
+            (Some(tag), None, Some((y_min, y_max))) => {
+                write!(f, "[{}]({}, {} [{};{}])", tag, self.x, self.y, y_min, y_max)
+            }
+            (Some(tag), Some((x_min, x_max)), Some((y_min, y_max))) => write!(
+                f,
+                "[{}]({} [{};{}], {} [{};{}])",
+                tag, self.x, x_min, x_max, self.y, y_min, y_max
             ),
         }
     }

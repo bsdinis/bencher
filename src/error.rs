@@ -30,11 +30,22 @@ pub enum BencherError {
     #[error("No experiment code provided")]
     MissingCode,
 
+    #[error("The experiment code {0} exists with type {1}, cannot add idempotently with type {2}")]
+    MismatchedType(String, String, String),
+
+    #[error(
+        "The experiment code {0} exists with label {1}, cannot add idempotently with label {2}"
+    )]
+    MismatchedLabel(String, String, String),
+
     #[error("No lines found for experiment type {0}")]
     NoLines(String),
 
     #[error("Experiment `{0}` not found. Available experiments: {1}")]
     ExperimentNotFound(String, String),
+
+    #[error("Deserialization Error")]
+    Serde(#[from] serde_json::Error),
 }
 
 impl From<BencherError> for rusqlite::Error {

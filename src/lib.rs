@@ -1,6 +1,6 @@
 use cli_table::{format::Justify, Cell, Style, Table};
 use either::Either;
-use eyre::Result;
+use rusqlite::OptionalExtension;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufReader, Write};
@@ -16,6 +16,8 @@ pub use model::*;
 const BENCHER_CONFIG_FILENAME: &str = ".bencher-config";
 const COLORS: [&str; 5] = ["f6511d", "ffb400", "00a6ed", "7fb800", "0d2c54"];
 
+type BencherResult<T> = std::result::Result<T, BencherError>;
+
 pub enum Axis {
     X,
     Y,
@@ -28,7 +30,7 @@ pub struct Config {
 }
 
 impl<'a> Config {
-    pub fn new() -> Result<Self> {
+    pub fn new() -> BencherResult<Self> {
         let config_dir = find_config_dir()?;
 
         let config_file_path = config_dir.join(BENCHER_CONFIG_FILENAME);
@@ -47,12 +49,40 @@ impl<'a> Config {
     pub fn from_conn_and_config(
         db: rusqlite::Connection,
         inner_config: BencherConfig,
-    ) -> Result<Self> {
+    ) -> BencherResult<Self> {
         setup_db(&db)?;
         Ok(Self { db, inner_config })
     }
 
-    pub fn add_linear_experiment(&self, exp_type: &str, label: &str, code: &str) -> Result<()> {
+    fn check_if_code_exists(&self, exp_type: &str, label: &str, code: &str) -> BencherResult<bool> {
+        if let Some((existing_type, existing_label)) = self.db.query_row(
+            "select experiment_type, experiment_label from experiments where experiment_code = :code",
+            rusqlite::named_params! { ":code": code },
+            |row| Ok((row.get(0).unwrap_or("".into()), row.get(1).unwrap_or("".into())))
+            ).optional()? {
+
+            if &existing_type != exp_type {
+                Err(BencherError::MismatchedType(code.into(), existing_type, exp_type.into()))
+            } else if &existing_label != label {
+                Err(BencherError::MismatchedLabel(code.into(), existing_label, label.into()))
+            } else {
+                Ok(true)
+            }
+        } else {
+            Ok(false)
+        }
+    }
+
+    pub fn add_linear_experiment(
+        &self,
+        exp_type: &str,
+        label: &str,
+        code: &str,
+    ) -> BencherResult<()> {
+        if self.check_if_code_exists(exp_type, label, code)? {
+            return Ok(());
+        }
+
         let mut stmt = self.db.prepare(
             "insert into experiments (
                     experiment_type,
@@ -73,7 +103,11 @@ impl<'a> Config {
         Ok(())
     }
 
-    pub fn add_xy_experiment(&self, exp_type: &str, label: &str, code: &str) -> Result<()> {
+    pub fn add_xy_experiment(&self, exp_type: &str, label: &str, code: &str) -> BencherResult<()> {
+        if self.check_if_code_exists(exp_type, label, code)? {
+            return Ok(());
+        }
+
         let mut stmt = self.db.prepare(
             "insert into experiments (
                     experiment_type,
@@ -94,7 +128,7 @@ impl<'a> Config {
         Ok(())
     }
 
-    fn get_linear_experiment(&self, exp_type: &str) -> Result<LinearExperiment> {
+    fn get_linear_experiment(&self, exp_type: &str) -> BencherResult<LinearExperiment> {
         Ok(self
             .inner_config
             .linear_experiments
@@ -114,7 +148,7 @@ impl<'a> Config {
             .clone())
     }
 
-    fn get_linear_experiment_set(&self, code: &str) -> Result<LinearExperimentSet> {
+    fn get_linear_experiment_set(&self, code: &str) -> BencherResult<LinearExperimentSet> {
         let (label, exp_type) = self
             .db
             .query_row("select experiment_label, experiment_type from experiments where experiment_code = :code",
@@ -128,7 +162,10 @@ impl<'a> Config {
             })
     }
 
-    fn get_linear_experiment_sets(&self, exp_type: &str) -> Result<Vec<LinearExperimentSet>> {
+    fn get_linear_experiment_sets(
+        &self,
+        exp_type: &str,
+    ) -> BencherResult<Vec<LinearExperimentSet>> {
         let experiment = self.get_linear_experiment(exp_type)?;
 
         let mut stmt = self
@@ -153,7 +190,7 @@ impl<'a> Config {
         self.inner_config.linear_experiments.clone()
     }
 
-    pub fn linear_experiment_sets(&self) -> Result<Vec<LinearExperimentSet>> {
+    pub fn linear_experiment_sets(&self) -> BencherResult<Vec<LinearExperimentSet>> {
         let mut stmt = self.db.prepare(
             "select experiment_type, experiment_label, experiment_code from experiments",
         )?;
@@ -182,7 +219,7 @@ impl<'a> Config {
     pub fn get_linear_experiment_handle(
         &'a self,
         exp_type: &str,
-    ) -> Result<LinearExperimentHandle<'a>> {
+    ) -> BencherResult<LinearExperimentHandle<'a>> {
         Ok(LinearExperimentHandle::new(
             &self.db,
             self.get_linear_experiment(exp_type)?,
@@ -196,7 +233,7 @@ impl<'a> Config {
             .ok()
     }
 
-    fn get_xy_experiment(&self, exp_type: &str) -> Result<XYExperiment> {
+    fn get_xy_experiment(&self, exp_type: &str) -> BencherResult<XYExperiment> {
         Ok(self
             .inner_config
             .xy_experiments
@@ -216,7 +253,7 @@ impl<'a> Config {
             .clone())
     }
 
-    fn get_xy_experiment_line(&self, code: &str) -> Result<XYExperimentLine> {
+    fn get_xy_experiment_line(&self, code: &str) -> BencherResult<XYExperimentLine> {
         let (label, exp_type) = self
             .db
             .query_row("select experiment_label, experiment_type from experiments where experiment_code = :code",
@@ -229,7 +266,7 @@ impl<'a> Config {
         })
     }
 
-    fn get_xy_experiment_lines(&self, exp_type: &str) -> Result<Vec<XYExperimentLine>> {
+    fn get_xy_experiment_lines(&self, exp_type: &str) -> BencherResult<Vec<XYExperimentLine>> {
         let experiment = self.get_xy_experiment(exp_type)?;
 
         let mut stmt = self
@@ -254,7 +291,7 @@ impl<'a> Config {
         self.inner_config.xy_experiments.clone()
     }
 
-    pub fn xy_experiment_lines(&self) -> Result<Vec<XYExperimentLine>> {
+    pub fn xy_experiment_lines(&self) -> BencherResult<Vec<XYExperimentLine>> {
         let mut stmt = self.db.prepare(
             "select experiment_type, experiment_label, experiment_code from experiments",
         )?;
@@ -280,7 +317,10 @@ impl<'a> Config {
         Ok(vec)
     }
 
-    pub fn get_xy_experiment_handle(&'a self, exp_type: &str) -> Result<XYExperimentHandle<'a>> {
+    pub fn get_xy_experiment_handle(
+        &'a self,
+        exp_type: &str,
+    ) -> BencherResult<XYExperimentHandle<'a>> {
         Ok(XYExperimentHandle::new(
             &self.db,
             self.get_xy_experiment(exp_type)?,
@@ -294,7 +334,7 @@ impl<'a> Config {
             .ok()
     }
 
-    pub fn status(&self) -> Result<Vec<ExperimentStatus>> {
+    pub fn status(&self) -> BencherResult<Vec<ExperimentStatus>> {
         let mut map = BTreeMap::new();
 
         let mut stmt = self.db.prepare(
@@ -443,7 +483,10 @@ fn linear_datapoint_from_row(row: &rusqlite::Row) -> Result<LinearDatapoint, rus
     Ok(datapoint)
 }
 
-fn get_linear_datapoints(db: &rusqlite::Connection, code: &str) -> Result<Vec<LinearDatapoint>> {
+fn get_linear_datapoints(
+    db: &rusqlite::Connection,
+    code: &str,
+) -> BencherResult<Vec<LinearDatapoint>> {
     let mut stmt = db.prepare(
         "select v_group, v_int, v_float,
                 v_int_1,    v_int_99,
@@ -482,7 +525,7 @@ impl<'a> LinearExperimentHandle<'a> {
         db: &'a rusqlite::Connection,
         experiment: LinearExperiment,
         sets: Vec<LinearExperimentSet>,
-    ) -> Result<Self, BencherError> {
+    ) -> BencherResult<Self> {
         if sets.len() == 0 {
             Err(BencherError::NoLines(experiment.exp_type))
         } else {
@@ -499,7 +542,7 @@ impl<'a> LinearExperimentHandle<'a> {
         }
     }
 
-    fn get_set_datapoints(&self) -> Result<BTreeMap<String, Vec<LinearDatapoint>>> {
+    fn get_set_datapoints(&self) -> BencherResult<BTreeMap<String, Vec<LinearDatapoint>>> {
         let mut map = BTreeMap::new();
         for exp in &self.sets {
             let datapoints = get_linear_datapoints(self.db, &exp.code)?;
@@ -513,7 +556,7 @@ impl<'a> LinearExperimentHandle<'a> {
     /// them with
     fn get_set_datapoints_magnitude(
         &self,
-    ) -> Result<(BTreeMap<String, Vec<LinearDatapoint>>, Magnitude)> {
+    ) -> BencherResult<(BTreeMap<String, Vec<LinearDatapoint>>, Magnitude)> {
         let set_datapoints = self.get_set_datapoints()?;
         let mut magnitude_counts = [0; 7];
 
@@ -549,7 +592,7 @@ impl<'a> LinearExperimentHandle<'a> {
         Ok((set_datapoints, mag))
     }
 
-    pub fn dump_table(&self) -> Result<()> {
+    pub fn dump_table(&self) -> BencherResult<()> {
         let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
 
         for (label, datapoints) in set_datapoints {
@@ -580,7 +623,7 @@ impl<'a> LinearExperimentHandle<'a> {
         Ok(())
     }
 
-    pub fn dump_latex_table(&self) -> Result<()> {
+    pub fn dump_latex_table(&self) -> BencherResult<()> {
         let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
         for (label, datapoints) in set_datapoints {
             println!("\\begin{{table}}[t]\n    \\centering\n    \\begin{{tabular}}{{|r|r|}}\n        \\hline");
@@ -605,7 +648,7 @@ impl<'a> LinearExperimentHandle<'a> {
         Ok(())
     }
 
-    pub fn dump_gnuplot(&self, prefix: &str, bar: bool) -> Result<()> {
+    pub fn dump_gnuplot(&self, prefix: &str, bar: bool) -> BencherResult<()> {
         let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
         println!(
             "reset
@@ -658,7 +701,7 @@ set ylabel '{} ({}{})'
         Ok(())
     }
 
-    pub fn dump_dat(&self, prefix: &str, bar: Option<usize>) -> Result<()> {
+    pub fn dump_dat(&self, prefix: &str, bar: Option<usize>) -> BencherResult<()> {
         let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
 
         let mut file = File::create(format!("{}.dat", prefix))?;
@@ -726,7 +769,7 @@ impl<'a> LinearSetHandle<'a> {
         self.experiment_set.label.as_ref()
     }
 
-    fn get_new_version(&self, datapoint: &LinearDatapoint) -> Result<isize> {
+    fn get_new_version(&self, datapoint: &LinearDatapoint) -> BencherResult<isize> {
         let new_version = self.db.query_row(
                 "select max(abs(version)) + 1 from linear_results where experiment_code = :code and v_group = :v_group",
             rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": datapoint.group },
@@ -736,7 +779,7 @@ impl<'a> LinearSetHandle<'a> {
         Ok(new_version)
     }
 
-    pub fn add_datapoint(&self, datapoint: LinearDatapoint) -> Result<()> {
+    pub fn add_datapoint(&self, datapoint: LinearDatapoint) -> BencherResult<()> {
         let version = self.get_new_version(&datapoint)?;
         let mut stmt = self.db.prepare(
             "insert into linear_results (
@@ -825,7 +868,7 @@ impl<'a> LinearSetHandle<'a> {
         Ok(())
     }
 
-    pub fn dump_raw(&self, group: &str) -> Result<()> {
+    pub fn dump_raw(&self, group: &str) -> BencherResult<()> {
         let datapoint = self.db.query_row(
             "select v_group, v_int, v_float,
                 v_int_1,    v_int_99,
@@ -869,7 +912,7 @@ impl<'a> LinearSetHandle<'a> {
         Ok(())
     }
 
-    pub fn version(&self, group: &str) -> Result<usize> {
+    pub fn version(&self, group: &str) -> BencherResult<usize> {
         Ok(self.db.query_row(
             "select abs(max(version)) from linear_results where experiment_code = :code and v_group = :v_group",
             rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group },
@@ -877,7 +920,7 @@ impl<'a> LinearSetHandle<'a> {
         )?)
     }
 
-    pub fn versions(&self, group: &str) -> Result<Vec<usize>> {
+    pub fn versions(&self, group: &str) -> BencherResult<Vec<usize>> {
         let mut stmt = self.db.prepare(
             "select abs(version) from linear_results where experiment_code = :code and v_group = :v_group",
         )?;
@@ -890,7 +933,7 @@ impl<'a> LinearSetHandle<'a> {
         Ok(result.into_iter().map(|x| x.unwrap()).collect())
     }
 
-    pub fn revert(&self, group: &str, version: Option<usize>) -> Result<()> {
+    pub fn revert(&self, group: &str, version: Option<usize>) -> BencherResult<()> {
         if let Some(v) = version {
             self.db.execute("update linear_results set version = abs(version) where experiment_code = :code and v_group = :v_group and abs(version) = :version",
                             rusqlite::named_params! { ":code": self.experiment_set.code, ":v_group": group, ":version": v})?;
@@ -1027,7 +1070,7 @@ fn xy_datapoint_from_row(row: &rusqlite::Row) -> Result<XYDatapoint, rusqlite::E
     })
 }
 
-fn get_xy_datapoints(db: &rusqlite::Connection, code: &str) -> Result<Vec<XYDatapoint>> {
+fn get_xy_datapoints(db: &rusqlite::Connection, code: &str) -> BencherResult<Vec<XYDatapoint>> {
     let mut stmt = db.prepare(
         "select x_int, x_float,
                 y_int, y_float,
@@ -1079,7 +1122,7 @@ impl<'a> XYExperimentHandle<'a> {
         db: &'a rusqlite::Connection,
         experiment: XYExperiment,
         lines: Vec<XYExperimentLine>,
-    ) -> Result<Self, BencherError> {
+    ) -> BencherResult<Self> {
         if lines.len() == 0 {
             Err(BencherError::NoLines(experiment.exp_type))
         } else {
@@ -1098,7 +1141,7 @@ impl<'a> XYExperimentHandle<'a> {
         }
     }
 
-    fn get_datapoints(&self) -> Result<BTreeMap<String, Vec<XYDatapoint>>> {
+    fn get_datapoints(&self) -> BencherResult<BTreeMap<String, Vec<XYDatapoint>>> {
         let mut map = BTreeMap::new();
         for exp in &self.lines {
             let datapoints = get_xy_datapoints(self.db, &exp.code)?;
@@ -1110,7 +1153,7 @@ impl<'a> XYExperimentHandle<'a> {
 
     fn get_datapoints_magnitudes(
         &self,
-    ) -> Result<(BTreeMap<String, Vec<XYDatapoint>>, Magnitude, Magnitude)> {
+    ) -> BencherResult<(BTreeMap<String, Vec<XYDatapoint>>, Magnitude, Magnitude)> {
         let datapoints = self.get_datapoints()?;
         let mut x_magnitude_counts = [0; 7];
         let mut y_magnitude_counts = [0; 7];
@@ -1176,7 +1219,7 @@ impl<'a> XYExperimentHandle<'a> {
         Ok((datapoints, x_mag, y_mag))
     }
 
-    pub fn dump_table(&self) -> Result<()> {
+    pub fn dump_table(&self) -> BencherResult<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
         for (label, datapoints) in datapoints {
@@ -1214,7 +1257,7 @@ impl<'a> XYExperimentHandle<'a> {
         Ok(())
     }
 
-    pub fn dump_latex_table(&self) -> Result<()> {
+    pub fn dump_latex_table(&self) -> BencherResult<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
         for (label, datapoints) in datapoints {
             println!("\\begin{{table}}[t]\n    \\centering\n    \\begin{{tabular}}{{|r|r|}}\n        \\hline");
@@ -1241,7 +1284,7 @@ impl<'a> XYExperimentHandle<'a> {
         Ok(())
     }
 
-    pub fn dump_gnuplot(&self, prefix: &str, xbar: bool, ybar: bool) -> Result<()> {
+    pub fn dump_gnuplot(&self, prefix: &str, xbar: bool, ybar: bool) -> BencherResult<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
         println!(
             "reset
@@ -1329,7 +1372,12 @@ set yrange [*:*]
         Ok(())
     }
 
-    pub fn dump_dat(&self, prefix: &str, xbar: Option<usize>, ybar: Option<usize>) -> Result<()> {
+    pub fn dump_dat(
+        &self,
+        prefix: &str,
+        xbar: Option<usize>,
+        ybar: Option<usize>,
+    ) -> BencherResult<()> {
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
         for (label, datapoints) in datapoints {
@@ -1389,7 +1437,7 @@ impl<'a> XYLineHandle<'a> {
         }
     }
 
-    fn tag_datapoint(&self, datapoint: XYDatapoint) -> Result<(XYDatapoint, isize)> {
+    fn tag_datapoint(&self, datapoint: XYDatapoint) -> BencherResult<(XYDatapoint, isize)> {
         if datapoint.tag.is_some() {
             let new_version = self.db.query_row(
                     "select max(abs(version)) + 1 from xy_results where experiment_code = :code and tag = :tag",
@@ -1413,7 +1461,7 @@ impl<'a> XYLineHandle<'a> {
         self.experiment_line.label.as_ref()
     }
 
-    pub fn add_datapoint(&self, datapoint: XYDatapoint) -> Result<()> {
+    pub fn add_datapoint(&self, datapoint: XYDatapoint) -> BencherResult<()> {
         let (datapoint, version) = self.tag_datapoint(datapoint)?;
         let mut stmt = self.db.prepare(
             "insert into xy_results (
@@ -1568,7 +1616,7 @@ impl<'a> XYLineHandle<'a> {
         Ok(())
     }
 
-    pub fn dump_raw(&self, tag: isize, axis: Axis) -> Result<()> {
+    pub fn dump_raw(&self, tag: isize, axis: Axis) -> BencherResult<()> {
         let datapoint = self.db.query_row(
             "select x_int, x_float,
                 y_int, y_float,
@@ -1650,7 +1698,7 @@ impl<'a> XYLineHandle<'a> {
         Ok(())
     }
 
-    pub fn version(&self, tag: isize) -> Result<usize> {
+    pub fn version(&self, tag: isize) -> BencherResult<usize> {
         Ok(self.db.query_row(
             "select abs(max(version)) from xy_results where experiment_code = :code and tag = :tag",
             rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag },
@@ -1658,7 +1706,7 @@ impl<'a> XYLineHandle<'a> {
         )?)
     }
 
-    pub fn versions(&self, tag: isize) -> Result<Vec<usize>> {
+    pub fn versions(&self, tag: isize) -> BencherResult<Vec<usize>> {
         let mut stmt = self.db.prepare(
             "select abs(version) from xy_results where experiment_code = :code and tag = :tag",
         )?;
@@ -1671,7 +1719,7 @@ impl<'a> XYLineHandle<'a> {
         Ok(result.into_iter().map(|x| x.unwrap()).collect())
     }
 
-    pub fn revert(&self, tag: isize, version: Option<usize>) -> Result<()> {
+    pub fn revert(&self, tag: isize, version: Option<usize>) -> BencherResult<()> {
         if let Some(v) = version {
             self.db.execute("update xy_results set version = abs(version) where experiment_code = :code and tag = :tag and abs(version) = :version",
                             rusqlite::named_params! { ":code": self.experiment_line.code, ":tag": tag, ":version": v})?;
@@ -1686,7 +1734,7 @@ impl<'a> XYLineHandle<'a> {
     }
 }
 
-fn find_config_dir() -> Result<PathBuf> {
+fn find_config_dir() -> BencherResult<PathBuf> {
     let mut dir: PathBuf = Path::new(".").canonicalize()?;
     while !dir.parent().is_none() {
         let file = dir.join(BENCHER_CONFIG_FILENAME);
@@ -1700,7 +1748,7 @@ fn find_config_dir() -> Result<PathBuf> {
     Err(BencherError::NotFound.into())
 }
 
-fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
+fn open_db(db_path: &Path) -> BencherResult<rusqlite::Connection> {
     let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
         | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
         | rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
@@ -1711,7 +1759,7 @@ fn open_db(db_path: &Path) -> Result<rusqlite::Connection> {
     }
 }
 
-fn setup_db(db: &rusqlite::Connection) -> Result<()> {
+fn setup_db(db: &rusqlite::Connection) -> BencherResult<()> {
     db.execute(
         "create table if not exists experiments (
             experiment_code text not null primary key,

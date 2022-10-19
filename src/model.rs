@@ -773,7 +773,7 @@ mod test {
         let datapoint = LinearDatapoint::from_sample_i64("", &mut sample)
             .unwrap()
             .unwrap();
-        assert_eq!(datapoint.v, Value::Int(49));
+        assert_eq!(datapoint.v, Value::Int(50));
         assert_eq!(
             datapoint.get_confidence(1),
             Some((Value::Int(1), Value::Int(99)))
@@ -860,8 +860,8 @@ mod test {
         let datapoint =
             XYDatapoint::from_samples(Either::Left(&mut x_sample), Either::Left(&mut y_sample))
                 .unwrap();
-        assert_eq!(datapoint.x, Value::Int(49));
-        assert_eq!(datapoint.y, Value::Int(1049));
+        assert_eq!(datapoint.x, Value::Int(50));
+        assert_eq!(datapoint.y, Value::Int(1050));
         assert_eq!(
             datapoint.get_x_confidence(1),
             Some((Value::Int(1), Value::Int(99)))

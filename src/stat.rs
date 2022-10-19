@@ -1,10 +1,5 @@
 pub fn integer_median(sorted_sample: &Vec<i64>) -> i64 {
-    let mid = sorted_sample.len() / 2;
-    if sorted_sample.len() % 2 == 0 {
-        (sorted_sample[mid - 1] + sorted_sample[mid]) / 2
-    } else {
-        sorted_sample[mid]
-    }
+    integer_percentile(sorted_sample, 50)
 }
 
 pub fn integer_percentile(sorted_sample: &Vec<i64>, percentile: usize) -> i64 {
@@ -17,12 +12,7 @@ pub fn integer_percentile(sorted_sample: &Vec<i64>, percentile: usize) -> i64 {
 }
 
 pub fn float_median(sorted_sample: &Vec<f64>) -> f64 {
-    let mid = sorted_sample.len() / 2;
-    if sorted_sample.len() % 2 == 0 {
-        (sorted_sample[mid - 1] + sorted_sample[mid]) / 2.0
-    } else {
-        sorted_sample[mid]
-    }
+    float_percentile(sorted_sample, 50)
 }
 
 pub fn float_percentile(sorted_sample: &Vec<f64>, percentile: usize) -> f64 {

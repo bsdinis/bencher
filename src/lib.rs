@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 mod error;
 mod model;
-mod stat;
+pub mod stat;
 
 pub use error::*;
 pub use model::*;

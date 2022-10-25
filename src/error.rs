@@ -12,8 +12,12 @@ pub enum BencherError {
     #[error("SQLite error")]
     Database(#[from] rusqlite::Error),
 
-    #[error("IO Error")]
-    IoError(#[from] std::io::Error),
+    #[error("IO Error: {msg}")]
+    IoError {
+        #[source]
+        source: std::io::Error,
+        msg: String,
+    },
 
     #[error("Invalid confidence level: {0}")]
     InvalidConfidence(usize),

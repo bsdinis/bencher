@@ -34,7 +34,11 @@ impl<'a> Config {
         let config_dir = find_config_dir()?;
 
         let config_file_path = config_dir.join(BENCHER_CONFIG_FILENAME);
-        let config_file = File::open(config_file_path)?;
+        let config_file =
+            File::open(config_file_path.clone()).map_err(|e| BencherError::IoError {
+                source: e,
+                msg: format!("opening {:?}", config_file_path),
+            })?;
         let reader = BufReader::new(config_file);
         let inner_config: BencherConfig = serde_json::from_reader(reader)?;
 
@@ -618,7 +622,10 @@ impl<'a> LinearExperimentHandle<'a> {
                 ])
                 .bold(true);
 
-            cli_table::print_stdout(table)?;
+            cli_table::print_stdout(table).map_err(|e| BencherError::IoError {
+                source: e,
+                msg: "printing table".into(),
+            })?;
         }
         Ok(())
     }
@@ -704,7 +711,11 @@ set ylabel '{} ({}{})'
     pub fn dump_dat(&self, prefix: &str, bar: Option<usize>) -> BencherResult<()> {
         let (set_datapoints, mag) = self.get_set_datapoints_magnitude()?;
 
-        let mut file = File::create(format!("{}.dat", prefix))?;
+        let mut file =
+            File::create(format!("{}.dat", prefix)).map_err(|e| BencherError::IoError {
+                source: e,
+                msg: format!("creating {}.dat", prefix),
+            })?;
         let confidence_str = bar
             .map(|c| {
                 format!(
@@ -714,7 +725,12 @@ set ylabel '{} ({}{})'
                 )
             })
             .unwrap_or("".to_owned());
-        writeln!(&mut file, "#begin {} {}", prefix, confidence_str)?;
+        writeln!(&mut file, "#begin {} {}", prefix, confidence_str).map_err(|e| {
+            BencherError::IoError {
+                source: e,
+                msg: "writing dat to file".into(),
+            }
+        })?;
 
         // table: mapping from group to values, ordered by what it matters
         let mut group_values = BTreeMap::new();
@@ -724,13 +740,28 @@ set ylabel '{} ({}{})'
             &mut file,
             "{:>34} ",
             format!("\"{}\"", self.horizontal_label)
-        )?;
+        )
+        .map_err(|e| BencherError::IoError {
+            source: e,
+            msg: "writing dat to file".into(),
+        })?;
 
         for (label, datapoints) in set_datapoints {
-            write!(&mut file, "{:>34} ", format!("\"{}\"", label))?;
+            write!(&mut file, "{:>34} ", format!("\"{}\"", label)).map_err(|e| {
+                BencherError::IoError {
+                    source: e,
+                    msg: "writing dat to file".into(),
+                }
+            })?;
             if bar.is_some() {
-                write!(&mut file, "{:>34} ", "\"min\"")?;
-                write!(&mut file, "{:>34} ", "\"max\"")?;
+                write!(&mut file, "{:>34} ", "\"min\"").map_err(|e| BencherError::IoError {
+                    source: e,
+                    msg: "writing dat to file".into(),
+                })?;
+                write!(&mut file, "{:>34} ", "\"max\"").map_err(|e| BencherError::IoError {
+                    source: e,
+                    msg: "writing dat to file".into(),
+                })?;
             }
 
             for datapoint in datapoints {
@@ -749,13 +780,24 @@ set ylabel '{} ({}{})'
         }
 
         for (group, values) in group_values {
-            write!(&mut file, "\n{:>34} ", format!("\"{}\"", group))?;
+            write!(&mut file, "\n{:>34} ", format!("\"{}\"", group)).map_err(|e| {
+                BencherError::IoError {
+                    source: e,
+                    msg: "writing dat to file".into(),
+                }
+            })?;
             for v in values {
-                write!(&mut file, "{:>34} ", v)?;
+                write!(&mut file, "{:>34} ", v).map_err(|e| BencherError::IoError {
+                    source: e,
+                    msg: "writing dat to file".into(),
+                })?;
             }
         }
 
-        writeln!(&mut file, "\n#end")?;
+        writeln!(&mut file, "\n#end").map_err(|e| BencherError::IoError {
+            source: e,
+            msg: "writing dat to file".into(),
+        })?;
         Ok(())
     }
 }
@@ -1252,7 +1294,10 @@ impl<'a> XYExperimentHandle<'a> {
                 .bold(true);
 
             println!(">> {} <<", label);
-            cli_table::print_stdout(table)?;
+            cli_table::print_stdout(table).map_err(|e| BencherError::IoError {
+                source: e,
+                msg: "writing cli table".into(),
+            })?;
         }
         Ok(())
     }
@@ -1337,7 +1382,7 @@ set yrange [*:*]
                     (true, true) => format!(
                         "'{}_{}.dat' title '{}' with xyerrorbars linestyle {}, '' title '' with lines linestyle {}",
                         prefix,
-                        label.to_lowercase(),
+                        label.to_lowercase().replace("/", "_"),
                         label,
                         2 * idx + 2,
                         2 * idx + 1,
@@ -1345,7 +1390,7 @@ set yrange [*:*]
                     (true, false) => format!(
                         "'{}_{}.dat' title '{}' with xerrorbars linestyle {}, '' title '' with lines linestyle {}",
                         prefix,
-                        label.to_lowercase(),
+                        label.to_lowercase().replace("/", "_"),
                         label,
                         2 * idx + 2,
                         2 * idx + 1,
@@ -1353,7 +1398,7 @@ set yrange [*:*]
                     (false, true) => format!(
                         "'{}_{}.dat' title '{}' with yerrorbars linestyle {}, '' title '' with lines linestyle {}",
                         prefix,
-                        label.to_lowercase(),
+                        label.to_lowercase().replace("/", "_"),
                         label,
                         2 * idx + 2,
                         2 * idx + 1,
@@ -1361,7 +1406,7 @@ set yrange [*:*]
                     (false, false) => format!(
                         "'{}_{}.dat' title '{}' with linespoint linestyle {}",
                         prefix,
-                        label.to_lowercase(),
+                        label.to_lowercase().replace("/", "_"),
                         label,
                         2 * idx + 1
                     ),
@@ -1381,7 +1426,15 @@ set yrange [*:*]
         let (datapoints, x_mag, y_mag) = self.get_datapoints_magnitudes()?;
 
         for (label, datapoints) in datapoints {
-            let mut file = File::create(format!("{}_{}.dat", prefix, label.to_lowercase()))?;
+            let mut file = File::create(format!(
+                "{}_{}.dat",
+                prefix,
+                label.to_lowercase().replace("/", "_")
+            ))
+            .map_err(|e| BencherError::IoError {
+                source: e,
+                msg: format!("creating file {}_{}.dat", prefix, label.to_lowercase()),
+            })?;
             writeln!(
                 &mut file,
                 "# {}\n# x axis: {} ({}{})\n# y axis: {} ({}{})\n",
@@ -1392,14 +1445,22 @@ set yrange [*:*]
                 self.y_label,
                 y_mag.prefix(),
                 self.y_units
-            )?;
+            )
+            .map_err(|e| BencherError::IoError {
+                source: e,
+                msg: "writing dat file".into(),
+            })?;
             for d in datapoints {
                 write!(
                     &mut file,
                     "{:>8} {:>8}",
                     d.x.display_with_magnitude(x_mag),
                     d.y.display_with_magnitude(y_mag)
-                )?;
+                )
+                .map_err(|e| BencherError::IoError {
+                    source: e,
+                    msg: "writing dat file".into(),
+                })?;
 
                 if let Some(c) = xbar {
                     let (xmin, xmax) = d.get_x_confidence(c).unwrap_or((d.x.clone(), d.x.clone()));
@@ -1408,7 +1469,11 @@ set yrange [*:*]
                         " {:>8} {:>8}",
                         xmin.display_with_magnitude(x_mag),
                         xmax.display_with_magnitude(x_mag)
-                    )?;
+                    )
+                    .map_err(|e| BencherError::IoError {
+                        source: e,
+                        msg: "writing dat file".into(),
+                    })?;
                 }
 
                 if let Some(c) = ybar {
@@ -1418,12 +1483,22 @@ set yrange [*:*]
                         " {:>8} {:>8}",
                         ymin.display_with_magnitude(y_mag),
                         ymax.display_with_magnitude(y_mag)
-                    )?;
+                    )
+                    .map_err(|e| BencherError::IoError {
+                        source: e,
+                        msg: "writing dat file".into(),
+                    })?;
                 }
 
-                writeln!(&mut file, "")?;
+                writeln!(&mut file, "").map_err(|e| BencherError::IoError {
+                    source: e,
+                    msg: "writing dat file".into(),
+                })?;
             }
-            writeln!(&mut file, "\n# end")?;
+            writeln!(&mut file, "\n# end").map_err(|e| BencherError::IoError {
+                source: e,
+                msg: "writing dat file".into(),
+            })?;
         }
         Ok(())
     }
@@ -1735,7 +1810,12 @@ impl<'a> XYLineHandle<'a> {
 }
 
 fn find_config_dir() -> BencherResult<PathBuf> {
-    let mut dir: PathBuf = Path::new(".").canonicalize()?;
+    let mut dir: PathBuf = Path::new(".")
+        .canonicalize()
+        .map_err(|e| BencherError::IoError {
+            source: e,
+            msg: "failed to canonicalize current dir name".into(),
+        })?;
     while !dir.parent().is_none() {
         let file = dir.join(BENCHER_CONFIG_FILENAME);
         if file.exists() {

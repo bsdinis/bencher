@@ -196,7 +196,7 @@ impl LinearDatapoint {
         }
     }
 
-    pub fn from_sample_i64(
+    pub fn from_sample_i64_median(
         group: impl Into<String>,
         sample: &mut Vec<i64>,
     ) -> Result<Option<Self>, BencherError> {
@@ -219,7 +219,7 @@ impl LinearDatapoint {
         Ok(Some(datapoint))
     }
 
-    pub fn from_sample_f64(
+    pub fn from_sample_f64_median(
         group: impl Into<String>,
         sample: &mut Vec<f64>,
     ) -> Result<Option<Self>, BencherError> {
@@ -228,6 +228,52 @@ impl LinearDatapoint {
         }
         sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let mut datapoint = LinearDatapoint::new(group, Value::Float(float_median(&sample)));
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (lower, upper) = (
+                float_percentile(&sample, *confidence),
+                float_percentile(&sample, 100 - *confidence),
+            );
+            datapoint
+                .add_confidence(*confidence, Either::Right((lower, upper)))
+                .expect("Unexpected type mismatch");
+        }
+
+        Ok(Some(datapoint))
+    }
+
+    pub fn from_sample_i64_avg(
+        group: impl Into<String>,
+        sample: &mut Vec<i64>,
+    ) -> Result<Option<Self>, BencherError> {
+        if sample.len() == 0 {
+            return Ok(None);
+        }
+        sample.sort_unstable();
+        let mut datapoint = LinearDatapoint::new(group, Value::Int(integer_avg(&sample)));
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (lower, upper) = (
+                integer_percentile(&sample, *confidence),
+                integer_percentile(&sample, 100 - *confidence),
+            );
+            datapoint
+                .add_confidence(*confidence, Either::Left((lower, upper)))
+                .expect("Unexpected type mismatch");
+        }
+
+        Ok(Some(datapoint))
+    }
+
+    pub fn from_sample_f64_avg(
+        group: impl Into<String>,
+        sample: &mut Vec<f64>,
+    ) -> Result<Option<Self>, BencherError> {
+        if sample.len() == 0 {
+            return Ok(None);
+        }
+        sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut datapoint = LinearDatapoint::new(group, Value::Float(float_avg(&sample)));
 
         for confidence in [1, 5, 10, 25].iter() {
             let (lower, upper) = (
@@ -328,7 +374,10 @@ impl XYDatapoint {
         }
     }
 
-    fn from_samples_i64_i64(x_sample: &mut Vec<i64>, y_sample: &mut Vec<i64>) -> Option<Self> {
+    fn from_samples_i64_i64_median(
+        x_sample: &mut Vec<i64>,
+        y_sample: &mut Vec<i64>,
+    ) -> Option<Self> {
         if x_sample.len() == 0 || y_sample.len() == 0 {
             return None;
         }
@@ -358,7 +407,10 @@ impl XYDatapoint {
         Some(datapoint)
     }
 
-    fn from_samples_i64_f64(x_sample: &mut Vec<i64>, y_sample: &mut Vec<f64>) -> Option<Self> {
+    fn from_samples_i64_f64_median(
+        x_sample: &mut Vec<i64>,
+        y_sample: &mut Vec<f64>,
+    ) -> Option<Self> {
         if x_sample.len() == 0 || y_sample.len() == 0 {
             return None;
         }
@@ -388,7 +440,10 @@ impl XYDatapoint {
         Some(datapoint)
     }
 
-    fn from_samples_f64_i64(x_sample: &mut Vec<f64>, y_sample: &mut Vec<i64>) -> Option<Self> {
+    fn from_samples_f64_i64_median(
+        x_sample: &mut Vec<f64>,
+        y_sample: &mut Vec<i64>,
+    ) -> Option<Self> {
         if x_sample.len() == 0 || y_sample.len() == 0 {
             return None;
         }
@@ -418,7 +473,10 @@ impl XYDatapoint {
         Some(datapoint)
     }
 
-    fn from_samples_f64_f64(x_sample: &mut Vec<f64>, y_sample: &mut Vec<f64>) -> Option<Self> {
+    fn from_samples_f64_f64_median(
+        x_sample: &mut Vec<f64>,
+        y_sample: &mut Vec<f64>,
+    ) -> Option<Self> {
         if x_sample.len() == 0 || y_sample.len() == 0 {
             return None;
         }
@@ -448,15 +506,147 @@ impl XYDatapoint {
         Some(datapoint)
     }
 
-    pub fn from_samples(
+    pub fn from_samples_median(
         x_sample: Either<&mut Vec<i64>, &mut Vec<f64>>,
         y_sample: Either<&mut Vec<i64>, &mut Vec<f64>>,
     ) -> Option<Self> {
         match (x_sample, y_sample) {
-            (Either::Left(x), Either::Left(y)) => Self::from_samples_i64_i64(x, y),
-            (Either::Left(x), Either::Right(y)) => Self::from_samples_i64_f64(x, y),
-            (Either::Right(x), Either::Left(y)) => Self::from_samples_f64_i64(x, y),
-            (Either::Right(x), Either::Right(y)) => Self::from_samples_f64_f64(x, y),
+            (Either::Left(x), Either::Left(y)) => Self::from_samples_i64_i64_median(x, y),
+            (Either::Left(x), Either::Right(y)) => Self::from_samples_i64_f64_median(x, y),
+            (Either::Right(x), Either::Left(y)) => Self::from_samples_f64_i64_median(x, y),
+            (Either::Right(x), Either::Right(y)) => Self::from_samples_f64_f64_median(x, y),
+        }
+    }
+
+    fn from_samples_i64_i64_avg(x_sample: &mut Vec<i64>, y_sample: &mut Vec<i64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable();
+        y_sample.sort_unstable();
+        let mut datapoint = XYDatapoint::new(
+            Value::Int(integer_avg(&x_sample)),
+            Value::Int(integer_avg(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                integer_percentile(&x_sample, *confidence),
+                integer_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                integer_percentile(&y_sample, *confidence),
+                integer_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    fn from_samples_i64_f64_avg(x_sample: &mut Vec<i64>, y_sample: &mut Vec<f64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable();
+        y_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut datapoint = XYDatapoint::new(
+            Value::Int(integer_avg(&x_sample)),
+            Value::Float(float_avg(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                integer_percentile(&x_sample, *confidence),
+                integer_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                float_percentile(&y_sample, *confidence),
+                float_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    fn from_samples_f64_i64_avg(x_sample: &mut Vec<f64>, y_sample: &mut Vec<i64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        y_sample.sort_unstable();
+        let mut datapoint = XYDatapoint::new(
+            Value::Float(float_avg(&x_sample)),
+            Value::Int(integer_avg(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                float_percentile(&x_sample, *confidence),
+                float_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                integer_percentile(&y_sample, *confidence),
+                integer_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    fn from_samples_f64_f64_avg(x_sample: &mut Vec<f64>, y_sample: &mut Vec<f64>) -> Option<Self> {
+        if x_sample.len() == 0 || y_sample.len() == 0 {
+            return None;
+        }
+        x_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        y_sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
+        let mut datapoint = XYDatapoint::new(
+            Value::Float(float_avg(&x_sample)),
+            Value::Float(float_avg(&y_sample)),
+        );
+
+        for confidence in [1, 5, 10, 25].iter() {
+            let (x_lower, x_upper) = (
+                float_percentile(&x_sample, *confidence),
+                float_percentile(&x_sample, 100 - *confidence),
+            );
+            let (y_lower, y_upper) = (
+                float_percentile(&y_sample, *confidence),
+                float_percentile(&y_sample, 100 - *confidence),
+            );
+            datapoint
+                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .expect("Unexpected type mismatch");
+            datapoint
+                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .expect("Unexpected type mismatch");
+        }
+        Some(datapoint)
+    }
+
+    pub fn from_samples_avg(
+        x_sample: Either<&mut Vec<i64>, &mut Vec<f64>>,
+        y_sample: Either<&mut Vec<i64>, &mut Vec<f64>>,
+    ) -> Option<Self> {
+        match (x_sample, y_sample) {
+            (Either::Left(x), Either::Left(y)) => Self::from_samples_i64_i64_avg(x, y),
+            (Either::Left(x), Either::Right(y)) => Self::from_samples_i64_f64_avg(x, y),
+            (Either::Right(x), Either::Left(y)) => Self::from_samples_f64_i64_avg(x, y),
+            (Either::Right(x), Either::Right(y)) => Self::from_samples_f64_f64_avg(x, y),
         }
     }
 
@@ -766,11 +956,11 @@ mod test {
 
     #[test]
     fn linear_datapoint_from_sample_i64() {
-        assert!(LinearDatapoint::from_sample_i64("", &mut vec![])
+        assert!(LinearDatapoint::from_sample_i64_median("", &mut vec![])
             .unwrap()
             .is_none());
         let mut sample: Vec<i64> = (0..100).into_iter().collect();
-        let datapoint = LinearDatapoint::from_sample_i64("", &mut sample)
+        let datapoint = LinearDatapoint::from_sample_i64_median("", &mut sample)
             .unwrap()
             .unwrap();
         assert_eq!(datapoint.v, Value::Int(50));
@@ -843,23 +1033,28 @@ mod test {
 
     #[test]
     fn xy_datapoint_from_sample_i64() {
-        assert!(
-            XYDatapoint::from_samples(Either::Left(&mut vec![]), Either::Left(&mut vec![]))
-                .is_none()
-        );
-        assert!(
-            XYDatapoint::from_samples(Either::Left(&mut vec![1]), Either::Left(&mut vec![]))
-                .is_none()
-        );
-        assert!(
-            XYDatapoint::from_samples(Either::Left(&mut vec![]), Either::Left(&mut vec![1]))
-                .is_none()
-        );
+        assert!(XYDatapoint::from_samples_median(
+            Either::Left(&mut vec![]),
+            Either::Left(&mut vec![])
+        )
+        .is_none());
+        assert!(XYDatapoint::from_samples_median(
+            Either::Left(&mut vec![1]),
+            Either::Left(&mut vec![])
+        )
+        .is_none());
+        assert!(XYDatapoint::from_samples_median(
+            Either::Left(&mut vec![]),
+            Either::Left(&mut vec![1])
+        )
+        .is_none());
         let mut x_sample: Vec<i64> = (0..100).into_iter().collect();
         let mut y_sample: Vec<i64> = (1000..1100).rev().into_iter().collect();
-        let datapoint =
-            XYDatapoint::from_samples(Either::Left(&mut x_sample), Either::Left(&mut y_sample))
-                .unwrap();
+        let datapoint = XYDatapoint::from_samples_median(
+            Either::Left(&mut x_sample),
+            Either::Left(&mut y_sample),
+        )
+        .unwrap();
         assert_eq!(datapoint.x, Value::Int(50));
         assert_eq!(datapoint.y, Value::Int(1050));
         assert_eq!(
@@ -900,14 +1095,16 @@ mod test {
     fn linear_datapoint_from_xy_datapoint() {
         let mut x_sample: Vec<i64> = (0..100).into_iter().collect();
         let mut y_sample: Vec<i64> = (1000..1100).rev().into_iter().collect();
-        let datapoint =
-            XYDatapoint::from_samples(Either::Left(&mut x_sample), Either::Left(&mut y_sample))
-                .unwrap();
+        let datapoint = XYDatapoint::from_samples_median(
+            Either::Left(&mut x_sample),
+            Either::Left(&mut y_sample),
+        )
+        .unwrap();
 
-        let x_datapoint = LinearDatapoint::from_sample_i64("", &mut x_sample)
+        let x_datapoint = LinearDatapoint::from_sample_i64_median("", &mut x_sample)
             .unwrap()
             .unwrap();
-        let y_datapoint = LinearDatapoint::from_sample_i64("", &mut y_sample)
+        let y_datapoint = LinearDatapoint::from_sample_i64_median("", &mut y_sample)
             .unwrap()
             .unwrap();
 

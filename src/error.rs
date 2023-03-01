@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use rusqlite;
 use thiserror::Error;
 
@@ -12,18 +14,24 @@ pub enum BencherError {
     #[error("SQLite error")]
     Database(#[from] rusqlite::Error),
 
-    #[error("IO Error: {msg}")]
+    #[error("IO Error: {message}")]
     IoError {
         #[source]
         source: std::io::Error,
-        msg: String,
+        message: String,
     },
+
+    #[error("Unknown experiment type: {0}")]
+    UnknownExperimentType(String),
 
     #[error("Invalid confidence level: {0}")]
     InvalidConfidence(usize),
 
     #[error("Point type and error bar type do not match")]
-    MismatchedTypes,
+    MismatchedBarTypes,
+
+    #[error("Cannot have with both linear and bidimensional confidences")]
+    IncompatibleBarTypes,
 
     #[error("No experiment type provided. Available experiments: {0}")]
     MissingExperiment(String),
@@ -45,11 +53,38 @@ pub enum BencherError {
     #[error("No lines found for experiment type {0}")]
     NoLines(String),
 
+    #[error("No sets found for experiment type {0}")]
+    NoSets(String),
+
     #[error("Experiment `{0}` not found. Available experiments: {1}")]
     ExperimentNotFound(String, String),
 
     #[error("Deserialization Error")]
     Serde(#[from] serde_json::Error),
+
+    #[error("Incompatible databases for view: {db} has codes which are already in other databases: {codes:?}")]
+    IncompatibleDbs {
+        db: std::path::PathBuf,
+        codes: HashSet<String>,
+    },
+
+    #[error("Duplicate experiment: already have experiment with code {0}")]
+    DuplicateExperiment(String),
+
+    #[error("Schema error: missing table {0} in db {1}")]
+    SchemaMissingTable(String, String),
+
+    #[error("Failed to create path from prefix {}: cannot add extension {}", .0.to_string_lossy(), .1)]
+    PathCreateError(std::path::PathBuf, String),
+}
+
+impl BencherError {
+    pub fn io_err(source: std::io::Error, message: impl ToString) -> BencherError {
+        BencherError::IoError {
+            source,
+            message: message.to_string(),
+        }
+    }
 }
 
 impl From<BencherError> for rusqlite::Error {
@@ -57,3 +92,5 @@ impl From<BencherError> for rusqlite::Error {
         rusqlite::Error::ModuleError(format!("{:?}", error))
     }
 }
+
+pub type BencherResult<T> = std::result::Result<T, BencherError>;

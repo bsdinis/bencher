@@ -92,7 +92,11 @@ fn config_experiments() {
 fn config_empty_status() {
     let config = gen_in_memory_read_config();
     assert_eq!(
-        config.status().unwrap().into_iter().collect::<HashSet<_>>(),
+        config
+            .status(&Selector::default())
+            .unwrap()
+            .into_iter()
+            .collect::<HashSet<_>>(),
         vec![
             ExperimentStatus {
                 database: ":memory:".to_string(),

@@ -634,7 +634,7 @@ impl DbReadBackend {
         Ok(vec)
     }
 
-    pub(crate) fn status(&self) -> BencherResult<Vec<ExperimentStatus>> {
+    pub(crate) fn status(&self, selector: &Selector) -> BencherResult<Vec<ExperimentStatus>> {
         let mut map = BTreeMap::new();
 
         for db in &self.dbs {
@@ -656,7 +656,10 @@ impl DbReadBackend {
                 })
             })? {
                 let status = status.unwrap();
-                map.insert(status.exp_code.clone(), status);
+                if selector.filter_code(&status.exp_code) && selector.filter_type(&status.exp_type)
+                {
+                    map.insert(status.exp_code.clone(), status);
+                }
             }
 
             let mut stmt = db
@@ -697,6 +700,7 @@ impl DbReadBackend {
     pub(crate) fn list_linear_experiments(
         &self,
         linear_experiments: &Vec<LinearExperiment>,
+        selector: &Selector,
     ) -> BencherResult<Vec<LinearExperimentInfo>> {
         let mut list = Vec::new();
 
@@ -707,7 +711,7 @@ impl DbReadBackend {
                 .unwrap_or("<unknown")
                 .to_string();
             let mut stmt = db.prepare(
-                "select experiment_code, experiment_label, experiment_type from experiments join linear_results on experiments.experiment_code = linear_results.experiment_code",
+                "select experiments.experiment_code, experiment_label, experiment_type from experiments join linear_results on experiments.experiment_code = linear_results.experiment_code",
             )?;
             for info in stmt.query_map([], |row| {
                 let exp_type = row.get(2).unwrap_or("".to_string());
@@ -728,7 +732,10 @@ impl DbReadBackend {
                 }
             })? {
                 if let Some(info) = info.unwrap() {
-                    list.push(info);
+                    if selector.filter_code(&info.exp_code) && selector.filter_type(&info.exp_type)
+                    {
+                        list.push(info);
+                    }
                 }
             }
         }
@@ -741,6 +748,7 @@ impl DbReadBackend {
     pub(crate) fn list_xy_experiments(
         &self,
         xy_experiments: &Vec<XYExperiment>,
+        selector: &Selector,
     ) -> BencherResult<Vec<XYExperimentInfo>> {
         let mut list = Vec::new();
 
@@ -751,7 +759,7 @@ impl DbReadBackend {
                 .unwrap_or("<unknown")
                 .to_string();
             let mut stmt = db.prepare(
-                "select experiment_code, experiment_label, experiment_type from experiments join xy_results on experiments.experiment_code = xy_results.experiment_code",
+                "select experiments.experiment_code, experiment_label, experiment_type from experiments join xy_results on experiments.experiment_code = xy_results.experiment_code",
             )?;
             for info in stmt.query_map([], |row| {
                 let exp_type = row.get(2).unwrap_or("".to_string());
@@ -772,7 +780,10 @@ impl DbReadBackend {
                 }
             })? {
                 if let Some(info) = info.unwrap() {
-                    list.push(info);
+                    if selector.filter_code(&info.exp_code) && selector.filter_type(&info.exp_type)
+                    {
+                        list.push(info);
+                    }
                 }
             }
         }
@@ -801,6 +812,7 @@ impl DbReadBackend {
     pub(crate) fn list_codes_labels_by_exp_type(
         &self,
         exp_type: &str,
+        selector: &Selector,
     ) -> BencherResult<Vec<(String, String)>> {
         let mut vec = vec![];
         for db in &self.dbs {
@@ -816,6 +828,13 @@ impl DbReadBackend {
                     ))
                 })?
                 .into_iter()
+                .filter(|obj| {
+                    if let Ok((ref exp_code, _)) = obj {
+                        selector.filter_code(exp_code)
+                    } else {
+                        true
+                    }
+                })
                 .map(|x| x.map_err(|e| e.into()))
                 .collect::<BencherResult<Vec<_>>>()?;
             vec.append(&mut inner);

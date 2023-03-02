@@ -347,6 +347,8 @@ set yrange [*:*]
             let table_display = table
                 .display()
                 .map_err(|e| BencherError::io_err(e, "creating table display"))?;
+            writeln!(writer, "{}:", line.line_label)
+                .map_err(|e| BencherError::io_err(e, "writing table display"))?;
             writeln!(writer, "{}", table_display)
                 .map_err(|e| BencherError::io_err(e, "writing table display"))?;
         }

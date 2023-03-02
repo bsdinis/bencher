@@ -58,10 +58,14 @@ fn find_config_dir() -> BencherResult<PathBuf> {
     let mut dir: PathBuf = Path::new(".")
         .canonicalize()
         .map_err(|e| BencherError::io_err(e, "failed to canonicalize current dir name"))?;
-    while !dir.parent().is_none() {
+    loop {
         let file = dir.join(BENCHER_CONFIG_FILENAME);
         if file.exists() {
             return Ok(dir);
+        }
+
+        if dir.parent().is_none() {
+            break;
         }
 
         dir.pop();
@@ -205,7 +209,7 @@ impl ReadConfig {
     ///     and given a set of paths to DBs
     pub fn with_dbs<'a>(paths: impl Iterator<Item = &'a std::path::Path>) -> BencherResult<Self> {
         let mut config_path = find_config_dir()?;
-        config_path.set_file_name(BENCHER_CONFIG_FILENAME);
+        config_path.push(BENCHER_CONFIG_FILENAME);
         Self::from_files(&config_path, paths, false)
     }
 
@@ -217,7 +221,7 @@ impl ReadConfig {
         paths: impl Iterator<Item = &'a std::path::Path>,
     ) -> BencherResult<Self> {
         let mut config_path = find_config_dir()?;
-        config_path.set_file_name(BENCHER_CONFIG_FILENAME);
+        config_path.push(BENCHER_CONFIG_FILENAME);
         Self::from_files(&config_path, paths, true)
     }
 
@@ -226,7 +230,7 @@ impl ReadConfig {
     ///     using the default db
     pub fn new() -> BencherResult<Self> {
         let mut config_path = find_config_dir()?;
-        config_path.set_file_name(BENCHER_CONFIG_FILENAME);
+        config_path.push(BENCHER_CONFIG_FILENAME);
         Self::from_files(&config_path, std::iter::empty(), true)
     }
 
@@ -242,8 +246,8 @@ impl ReadConfig {
         })
     }
 
-    pub fn status(&self) -> BencherResult<Vec<ExperimentStatus>> {
-        self.db.status()
+    pub fn status(&self, selector: &Selector) -> BencherResult<Vec<ExperimentStatus>> {
+        self.db.status(selector)
     }
 
     pub fn list_codes(&self) -> BencherResult<Vec<String>> {
@@ -258,14 +262,16 @@ impl ReadConfig {
         &self.xy_experiments
     }
 
-    // TODO: add selector object
-    pub fn list_linear_experiments(&self) -> BencherResult<Vec<LinearExperimentInfo>> {
-        self.db.list_linear_experiments(self.linear_experiments())
+    pub fn list_linear_experiments(
+        &self,
+        selector: &Selector,
+    ) -> BencherResult<Vec<LinearExperimentInfo>> {
+        self.db
+            .list_linear_experiments(self.linear_experiments(), selector)
     }
 
-    // TODO: add selector object
-    pub fn list_xy_experiments(&self) -> BencherResult<Vec<XYExperimentInfo>> {
-        self.db.list_xy_experiments(self.xy_experiments())
+    pub fn list_xy_experiments(&self, selector: &Selector) -> BencherResult<Vec<XYExperimentInfo>> {
+        self.db.list_xy_experiments(self.xy_experiments(), selector)
     }
 
     /// Linear experiments
@@ -287,15 +293,14 @@ impl ReadConfig {
 
     /// Get the linear experiment view for a given experiment type
     ///
-    /// TODO: add a selector object
-    ///
     fn get_linear_experiment_sets(
         &self,
         experiment: &LinearExperiment,
+        selector: &Selector,
     ) -> BencherResult<Vec<LinearExperimentSet>> {
         let codes_labels = self
             .db
-            .list_codes_labels_by_exp_type(&experiment.exp_type)?;
+            .list_codes_labels_by_exp_type(&experiment.exp_type, selector)?;
 
         codes_labels
             .into_iter()
@@ -308,7 +313,11 @@ impl ReadConfig {
             .collect::<BencherResult<_>>()
     }
 
-    pub fn linear_experiment_view(&self, exp_type: &str) -> BencherResult<LinearExperimentView> {
+    pub fn linear_experiment_view(
+        &self,
+        exp_type: &str,
+        selector: &Selector,
+    ) -> BencherResult<LinearExperimentView> {
         let linear_experiment = self.find_linear_experiment(exp_type).ok_or_else(|| {
             BencherError::ExperimentNotFound(
                 exp_type.to_string(),
@@ -316,7 +325,7 @@ impl ReadConfig {
             )
         })?;
 
-        let sets = self.get_linear_experiment_sets(linear_experiment)?;
+        let sets = self.get_linear_experiment_sets(linear_experiment, selector)?;
 
         LinearExperimentView::new(linear_experiment, sets)
     }
@@ -340,11 +349,11 @@ impl ReadConfig {
     fn get_xy_experiment_lines(
         &self,
         experiment: &XYExperiment,
+        selector: &Selector,
     ) -> BencherResult<Vec<XYExperimentLine>> {
-        // TODO: make this more flexible based on selector
         let codes_labels = self
             .db
-            .list_codes_labels_by_exp_type(&experiment.exp_type)?;
+            .list_codes_labels_by_exp_type(&experiment.exp_type, selector)?;
 
         codes_labels
             .into_iter()
@@ -358,12 +367,16 @@ impl ReadConfig {
     }
 
     /// Get the xy experiment view for a given experiment type
-    pub fn xy_experiment_view(&self, exp_type: &str) -> BencherResult<XYExperimentView> {
+    pub fn xy_experiment_view(
+        &self,
+        exp_type: &str,
+        selector: &Selector,
+    ) -> BencherResult<XYExperimentView> {
         let xy_experiment = self.find_xy_experiment(exp_type).ok_or_else(|| {
             BencherError::ExperimentNotFound(exp_type.to_string(), self.xy_experiments_as_string())
         })?;
 
-        let lines = self.get_xy_experiment_lines(xy_experiment)?;
+        let lines = self.get_xy_experiment_lines(xy_experiment, selector)?;
 
         XYExperimentView::new(xy_experiment, lines)
     }

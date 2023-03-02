@@ -1,4 +1,6 @@
-use bencher::{Bars, BencherError, ExperimentView, ReadConfig, WriteConfig};
+use bencher::{
+    Bars, BencherError, ExperimentView, ReadConfig, Selector, SelectorBuilder, WriteConfig,
+};
 
 use clap::{Parser, Subcommand};
 use cli_table::{format::Justify, Cell, Style, Table};
@@ -8,9 +10,6 @@ use std::fs::File;
 #[derive(Parser)]
 #[command(author, version, about, long_about)]
 struct Cli {
-    /// Paths to DBs
-    dbs: Vec<std::path::PathBuf>,
-
     /// Whether to use the default db or not
     #[arg(short, long)]
     default: bool,
@@ -21,15 +20,76 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    List,
-    Status,
+    List {
+        #[arg(short, long)]
+        exclude_code_regex: Option<String>,
+
+        #[arg(short, long)]
+        include_code_regex: Option<String>,
+
+        #[arg(long)]
+        exclude_type_regex: Option<String>,
+
+        #[arg(long)]
+        include_type_regex: Option<String>,
+
+        /// Paths to DBs
+        dbs: Vec<std::path::PathBuf>,
+    },
+    Status {
+        #[arg(short, long)]
+        exclude_code_regex: Option<String>,
+
+        #[arg(short, long)]
+        include_code_regex: Option<String>,
+
+        #[arg(long)]
+        exclude_type_regex: Option<String>,
+
+        #[arg(long)]
+        include_type_regex: Option<String>,
+
+        /// Paths to DBs
+        dbs: Vec<std::path::PathBuf>,
+    },
     Table {
         exp_type: String,
+
+        #[arg(short, long)]
+        exclude_code_regex: Option<String>,
+
+        #[arg(short, long)]
+        include_code_regex: Option<String>,
+
+        #[arg(long)]
+        exclude_type_regex: Option<String>,
+
+        #[arg(long)]
+        include_type_regex: Option<String>,
+
+        /// Paths to DBs
+        dbs: Vec<std::path::PathBuf>,
     },
     Latex {
         exp_type: String,
 
+        #[arg(short, long)]
         file: Option<std::path::PathBuf>,
+
+        #[arg(short, long)]
+        exclude_code_regex: Option<String>,
+
+        #[arg(short, long)]
+        include_code_regex: Option<String>,
+
+        #[arg(long)]
+        exclude_type_regex: Option<String>,
+
+        #[arg(long)]
+        include_type_regex: Option<String>,
+
+        /// Paths to DBs
+        dbs: Vec<std::path::PathBuf>,
     },
     Dat {
         exp_type: String,
@@ -44,6 +104,21 @@ enum Command {
 
         #[arg(short, long)]
         ybar: Option<usize>,
+
+        #[arg(short, long)]
+        exclude_code_regex: Option<String>,
+
+        #[arg(short, long)]
+        include_code_regex: Option<String>,
+
+        #[arg(long)]
+        exclude_type_regex: Option<String>,
+
+        #[arg(long)]
+        include_type_regex: Option<String>,
+
+        /// Paths to DBs
+        dbs: Vec<std::path::PathBuf>,
     },
     Gnuplot {
         exp_type: String,
@@ -58,6 +133,21 @@ enum Command {
 
         #[arg(short, long)]
         ybar: bool,
+
+        #[arg(short, long)]
+        exclude_code_regex: Option<String>,
+
+        #[arg(long)]
+        include_code_regex: Option<String>,
+
+        #[arg(long)]
+        exclude_type_regex: Option<String>,
+
+        #[arg(short, long)]
+        include_type_regex: Option<String>,
+
+        /// Paths to DBs
+        dbs: Vec<std::path::PathBuf>,
     },
     Plot {
         exp_type: String,
@@ -72,11 +162,30 @@ enum Command {
 
         #[arg(short, long)]
         ybar: Option<usize>,
+
+        #[arg(short, long)]
+        exclude_code_regex: Option<String>,
+
+        #[arg(short, long)]
+        include_code_regex: Option<String>,
+
+        #[arg(long)]
+        exclude_type_regex: Option<String>,
+
+        #[arg(long)]
+        include_type_regex: Option<String>,
+
+        /// Paths to DBs
+        dbs: Vec<std::path::PathBuf>,
     },
     Revert {
         code: String,
 
         version: Option<usize>,
+
+        /// Paths to DB
+        #[arg(short, long)]
+        db: Option<std::path::PathBuf>,
 
         #[arg(short, long)]
         tag: Option<isize>,
@@ -86,50 +195,63 @@ enum Command {
     },
 }
 
-fn get_read_config(cli: &Cli) -> Result<ReadConfig> {
-    if cli.default {
-        ReadConfig::with_dbs_and_default(cli.dbs.iter().map(|p| p.as_path())).map_err(|e| e.into())
+fn get_read_config(default: bool, dbs: Vec<std::path::PathBuf>) -> Result<ReadConfig> {
+    if default {
+        ReadConfig::with_dbs_and_default(dbs.iter().map(|p| p.as_path())).map_err(|e| e.into())
     } else {
-        ReadConfig::with_dbs(cli.dbs.iter().map(|p| p.as_path())).map_err(|e| e.into())
+        ReadConfig::with_dbs(dbs.iter().map(|p| p.as_path())).map_err(|e| e.into())
     }
 }
 
-fn get_write_config(cli: &Cli) -> Result<WriteConfig> {
-    if cli.default {
-        if cli.dbs.len() > 0 {
-            let db_string = cli
-                .dbs
-                .iter()
-                .map(|x| x.to_string_lossy().to_string())
-                .collect::<Vec<String>>()
-                .join(", ");
-            return Err(eyre::eyre!(
-                "cannot write to the default db and to multiple other dbs ({})",
-                db_string
-            ));
-        }
-
-        WriteConfig::new().map_err(|e| e.into())
+fn get_write_config(db: Option<std::path::PathBuf>) -> Result<WriteConfig> {
+    if let Some(db) = db {
+        WriteConfig::from_file(&db).map_err(|e| e.into())
     } else {
-        if cli.dbs.len() > 1 {
-            let db_string = cli
-                .dbs
-                .iter()
-                .map(|x| x.to_string_lossy().to_string())
-                .collect::<Vec<String>>()
-                .join(", ");
-            return Err(eyre::eyre!(
-                "cannot write to multiple dbs ({}): choose one",
-                db_string
-            ));
-        } else if cli.dbs.len() != 0 {
-            return Err(eyre::eyre!(
-                "need a db path; use --default if you want to use the default config"
-            ));
-        }
-
-        WriteConfig::from_file(&cli.dbs[0]).map_err(|e| e.into())
+        WriteConfig::new().map_err(|e| e.into())
     }
+}
+
+fn build_selector(
+    exclude_code_regex: &Option<String>,
+    include_code_regex: &Option<String>,
+    exclude_type_regex: &Option<String>,
+    include_type_regex: &Option<String>,
+) -> Result<Selector> {
+    let exclude_code_regex = exclude_code_regex
+        .as_ref()
+        .map(|re| regex::Regex::new(re))
+        .transpose()
+        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
+    let include_code_regex = include_code_regex
+        .as_ref()
+        .map(|re| regex::Regex::new(re))
+        .transpose()
+        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
+    let exclude_type_regex = exclude_type_regex
+        .as_ref()
+        .map(|re| regex::Regex::new(re))
+        .transpose()
+        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
+    let include_type_regex = include_type_regex
+        .as_ref()
+        .map(|re| regex::Regex::new(re))
+        .transpose()
+        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
+
+    let mut builder = SelectorBuilder::new();
+    if let Some(re) = exclude_code_regex {
+        builder = builder.code_exclude(re);
+    }
+    if let Some(re) = include_code_regex {
+        builder = builder.code_include(re);
+    }
+    if let Some(re) = exclude_type_regex {
+        builder = builder.type_exclude(re);
+    }
+    if let Some(re) = include_type_regex {
+        builder = builder.type_include(re);
+    }
+    Ok(builder.build())
 }
 
 fn main() -> Result<()> {
@@ -138,62 +260,157 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::List => {
-            let config = get_read_config(&cli)?;
-            list(&config)?;
+        Command::List {
+            dbs,
+            exclude_code_regex,
+            include_code_regex,
+            exclude_type_regex,
+            include_type_regex,
+        } => {
+            let selector = build_selector(
+                &exclude_code_regex,
+                &include_code_regex,
+                &exclude_type_regex,
+                &include_type_regex,
+            )?;
+            let config = get_read_config(cli.default, dbs)?;
+            list(&config, &selector)?;
         }
-        Command::Status => {
-            let config = get_read_config(&cli)?;
-            status(&config)?;
+        Command::Status {
+            dbs,
+            exclude_code_regex,
+            include_code_regex,
+            exclude_type_regex,
+            include_type_regex,
+        } => {
+            let selector = build_selector(
+                &exclude_code_regex,
+                &include_code_regex,
+                &exclude_type_regex,
+                &include_type_regex,
+            )?;
+            let config = get_read_config(cli.default, dbs)?;
+            status(&config, &selector)?;
         }
-        Command::Table { ref exp_type } => {
-            let config = get_read_config(&cli)?;
-            table(&config, &exp_type)?;
+        Command::Table {
+            dbs,
+            exclude_code_regex,
+            include_code_regex,
+            exclude_type_regex,
+            include_type_regex,
+            exp_type,
+        } => {
+            let selector = build_selector(
+                &exclude_code_regex,
+                &include_code_regex,
+                &exclude_type_regex,
+                &include_type_regex,
+            )?;
+            let config = get_read_config(cli.default, dbs)?;
+            table(&config, &exp_type, &selector)?;
         }
         Command::Latex {
-            ref exp_type,
-            ref file,
+            dbs,
+            exclude_code_regex,
+            include_code_regex,
+            exclude_type_regex,
+            include_type_regex,
+            exp_type,
+            file,
         } => {
-            let config = get_read_config(&cli)?;
-            latex(&config, &exp_type, file.as_ref().map(|x| x.as_path()))?;
+            let selector = build_selector(
+                &exclude_code_regex,
+                &include_code_regex,
+                &exclude_type_regex,
+                &include_type_regex,
+            )?;
+            let config = get_read_config(cli.default, dbs)?;
+            latex(
+                &config,
+                &exp_type,
+                file.as_ref().map(|x| x.as_path()),
+                &selector,
+            )?;
         }
         Command::Dat {
-            ref exp_type,
-            ref prefix,
+            dbs,
+            exclude_code_regex,
+            include_code_regex,
+            exclude_type_regex,
+            include_type_regex,
+            exp_type,
+            prefix,
             bar,
             xbar,
             ybar,
         } => {
-            let config = get_read_config(&cli)?;
-            dat(&config, &exp_type, prefix.as_path(), bar, xbar, ybar)?;
+            let selector = build_selector(
+                &exclude_code_regex,
+                &include_code_regex,
+                &exclude_type_regex,
+                &include_type_regex,
+            )?;
+            let config = get_read_config(cli.default, dbs)?;
+            dat(
+                &config,
+                &exp_type,
+                prefix.as_path(),
+                bar,
+                xbar,
+                ybar,
+                &selector,
+            )?;
         }
         Command::Gnuplot {
-            ref exp_type,
-            ref prefix,
+            dbs,
+            exclude_code_regex,
+            include_code_regex,
+            exclude_type_regex,
+            include_type_regex,
+            exp_type,
+            prefix,
             bar,
             xbar,
             ybar,
         } => {
-            let config = get_read_config(&cli)?;
-            gnuplot(&config, &exp_type, &prefix, bar, xbar, ybar)?;
+            let selector = build_selector(
+                &exclude_code_regex,
+                &include_code_regex,
+                &exclude_type_regex,
+                &include_type_regex,
+            )?;
+            let config = get_read_config(cli.default, dbs)?;
+            gnuplot(&config, &exp_type, &prefix, bar, xbar, ybar, &selector)?;
         }
         Command::Plot {
-            ref exp_type,
-            ref prefix,
+            dbs,
+            exclude_code_regex,
+            include_code_regex,
+            exclude_type_regex,
+            include_type_regex,
+            exp_type,
+            prefix,
             bar,
             xbar,
             ybar,
         } => {
-            let config = get_read_config(&cli)?;
-            plot(&config, &exp_type, &prefix, bar, xbar, ybar)?;
+            let selector = build_selector(
+                &exclude_code_regex,
+                &include_code_regex,
+                &exclude_type_regex,
+                &include_type_regex,
+            )?;
+            let config = get_read_config(cli.default, dbs)?;
+            plot(&config, &exp_type, &prefix, bar, xbar, ybar, &selector)?;
         }
         Command::Revert {
-            ref code,
+            db,
+            code,
             version,
             tag,
-            ref group,
+            group,
         } => {
-            let config = get_write_config(&cli)?;
+            let config = get_write_config(db)?;
             revert(&config, &code, tag, group.as_ref(), version)?;
         }
     }
@@ -201,8 +418,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn list(config: &ReadConfig) -> Result<()> {
-    let linear_list = config.list_linear_experiments()?;
+fn list(config: &ReadConfig, selector: &Selector) -> Result<()> {
+    let linear_list = config.list_linear_experiments(selector)?;
     let linear_table = linear_list
         .into_iter()
         .map(|e| {
@@ -231,7 +448,7 @@ fn list(config: &ReadConfig) -> Result<()> {
 
     cli_table::print_stdout(linear_table)?;
 
-    let xy_list = config.list_xy_experiments()?;
+    let xy_list = config.list_xy_experiments(selector)?;
     let xy_table = xy_list
         .into_iter()
         .map(|e| {
@@ -265,9 +482,9 @@ fn list(config: &ReadConfig) -> Result<()> {
     Ok(())
 }
 
-fn status(config: &ReadConfig) -> Result<()> {
+fn status(config: &ReadConfig, selector: &Selector) -> Result<()> {
     let table = config
-        .status()?
+        .status(selector)?
         .into_iter()
         .map(|s| {
             vec![
@@ -298,9 +515,9 @@ fn status(config: &ReadConfig) -> Result<()> {
     Ok(())
 }
 
-fn table(config: &ReadConfig, exp_type: &str) -> Result<()> {
-    let linear_view = config.linear_experiment_view(exp_type);
-    let xy_view = config.xy_experiment_view(exp_type);
+fn table(config: &ReadConfig, exp_type: &str, selector: &Selector) -> Result<()> {
+    let linear_view = config.linear_experiment_view(exp_type, selector);
+    let xy_view = config.xy_experiment_view(exp_type, selector);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -340,9 +557,14 @@ fn table(config: &ReadConfig, exp_type: &str) -> Result<()> {
     Ok(())
 }
 
-fn latex(config: &ReadConfig, exp_type: &str, file: Option<&std::path::Path>) -> Result<()> {
-    let linear_view = config.linear_experiment_view(exp_type);
-    let xy_view = config.xy_experiment_view(exp_type);
+fn latex(
+    config: &ReadConfig,
+    exp_type: &str,
+    file: Option<&std::path::Path>,
+    selector: &Selector,
+) -> Result<()> {
+    let linear_view = config.linear_experiment_view(exp_type, selector);
+    let xy_view = config.xy_experiment_view(exp_type, selector);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -399,10 +621,11 @@ fn dat(
     bar: Option<usize>,
     xbar: Option<usize>,
     ybar: Option<usize>,
+    selector: &Selector,
 ) -> Result<()> {
     let bars = Bars::from_optionals(bar, xbar, ybar)?;
-    let linear_view = config.linear_experiment_view(exp_type);
-    let xy_view = config.xy_experiment_view(exp_type);
+    let linear_view = config.linear_experiment_view(exp_type, selector);
+    let xy_view = config.xy_experiment_view(exp_type, selector);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -447,11 +670,12 @@ fn gnuplot(
     bar: bool,
     xbar: bool,
     ybar: bool,
+    selector: &Selector,
 ) -> Result<()> {
     let bars = Bars::from_bools(bar, xbar, ybar)?;
 
-    let linear_view = config.linear_experiment_view(exp_type);
-    let xy_view = config.xy_experiment_view(exp_type);
+    let linear_view = config.linear_experiment_view(exp_type, selector);
+    let xy_view = config.xy_experiment_view(exp_type, selector);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -496,10 +720,11 @@ fn plot(
     bar: Option<usize>,
     xbar: Option<usize>,
     ybar: Option<usize>,
+    selector: &Selector,
 ) -> Result<()> {
     let bars = Bars::from_optionals(bar, xbar, ybar)?;
-    let linear_view = config.linear_experiment_view(exp_type);
-    let xy_view = config.xy_experiment_view(exp_type);
+    let linear_view = config.linear_experiment_view(exp_type, selector);
+    let xy_view = config.xy_experiment_view(exp_type, selector);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {

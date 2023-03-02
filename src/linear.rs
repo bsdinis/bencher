@@ -124,7 +124,7 @@ set ylabel '{} ({}{})'
 
     fn dat(&self, prefix: &std::path::Path, bar: Bars) -> BencherResult<()> {
         let mut dat_path: std::path::PathBuf = prefix.into();
-        if !dat_path.set_extension(".dat") {
+        if !dat_path.set_extension("dat") {
             return Err(BencherError::PathCreateError(dat_path, "dat".to_string()));
         }
         let mut file = File::create(&dat_path).map_err(|e| {
@@ -206,48 +206,43 @@ set ylabel '{} ({}{})'
     }
 
     fn table<W: Write>(&self, writer: &mut W) -> BencherResult<()> {
+        let mut rows = Vec::new();
         for set in &self.sets {
-            writeln!(writer, ">> {} <<", set.set_label)
-                .map_err(|e| BencherError::io_err(e, "failed to write"))?;
-            let table = set
-                .values
-                .iter()
-                .map(|datapoint| {
-                    vec![
-                        datapoint.group.clone().cell().justify(Justify::Right),
-                        datapoint
-                            .v
-                            .display_with_magnitude(self.magnitude)
-                            .cell()
-                            .justify(Justify::Right),
-                    ]
-                })
-                .collect::<Vec<_>>()
-                .table()
-                .title(vec![
-                    set.set_label
-                        .clone()
+            rows.extend(set.values.iter().map(|datapoint| {
+                vec![
+                    set.set_label.clone().cell().justify(Justify::Right),
+                    datapoint.group.clone().cell().justify(Justify::Right),
+                    datapoint
+                        .v
+                        .display_with_magnitude(self.magnitude)
                         .cell()
-                        .justify(Justify::Center)
-                        .bold(true),
-                    format!(
-                        "{} ({}{})",
-                        self.v_label,
-                        self.magnitude.prefix(),
-                        self.v_units
-                    )
-                    .cell()
-                    .justify(Justify::Center)
-                    .bold(true),
-                ])
-                .bold(true);
-
-            let table_display = table
-                .display()
-                .map_err(|e| BencherError::io_err(e, "creating table display"))?;
-            writeln!(writer, "{}", table_display)
-                .map_err(|e| BencherError::io_err(e, "writing table display"))?;
+                        .justify(Justify::Right),
+                ]
+            }));
         }
+        let table = rows
+            .into_iter()
+            .table()
+            .title(vec![
+                "Set".cell().justify(Justify::Center).bold(true),
+                "Group".cell().justify(Justify::Center).bold(true),
+                format!(
+                    "{} ({}{})",
+                    self.v_label,
+                    self.magnitude.prefix(),
+                    self.v_units
+                )
+                .cell()
+                .justify(Justify::Center)
+                .bold(true),
+            ])
+            .bold(true);
+
+        let table_display = table
+            .display()
+            .map_err(|e| BencherError::io_err(e, "creating table display"))?;
+        writeln!(writer, "{}", table_display)
+            .map_err(|e| BencherError::io_err(e, "writing table display"))?;
         Ok(())
     }
 

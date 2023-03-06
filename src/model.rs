@@ -39,29 +39,27 @@ pub struct XYExperimentInfo {
 /// Struct to filter out results
 #[derive(Debug, Default)]
 pub struct Selector {
-    exp_code_exclude: Option<regex::Regex>,
-    exp_code_include: Option<regex::Regex>,
-    exp_type_exclude: Option<regex::Regex>,
-    exp_type_include: Option<regex::Regex>,
+    exp_code_exclude: Vec<regex::Regex>,
+    exp_code_include: Vec<regex::Regex>,
+    exp_type_exclude: Vec<regex::Regex>,
+    exp_type_include: Vec<regex::Regex>,
 }
 
 impl Selector {
     pub(crate) fn filter_code(&self, exp_code: &str) -> bool {
-        match (&self.exp_code_exclude, &self.exp_code_include) {
-            (None, None) => true,
-            (Some(ex), None) => !ex.is_match(exp_code),
-            (None, Some(in_)) => in_.is_match(exp_code),
-            (Some(ex), Some(in_)) => !ex.is_match(exp_code) && in_.is_match(exp_code),
-        }
+        let res = (self.exp_code_exclude.len() == 0
+            || !self.exp_code_exclude.iter().any(|re| re.is_match(exp_code)))
+            && (self.exp_code_include.len() == 0
+                || self.exp_code_include.iter().any(|re| re.is_match(exp_code)));
+
+        res
     }
 
     pub(crate) fn filter_type(&self, exp_type: &str) -> bool {
-        match (&self.exp_type_exclude, &self.exp_type_include) {
-            (None, None) => true,
-            (Some(ex), None) => !ex.is_match(exp_type),
-            (None, Some(in_)) => in_.is_match(exp_type),
-            (Some(ex), Some(in_)) => !ex.is_match(exp_type) && in_.is_match(exp_type),
-        }
+        (self.exp_type_exclude.len() == 0
+            || !self.exp_type_exclude.iter().any(|re| re.is_match(exp_type)))
+            && (self.exp_type_include.len() == 0
+                || self.exp_type_include.iter().any(|re| re.is_match(exp_type)))
     }
 }
 
@@ -77,22 +75,22 @@ impl SelectorBuilder {
     }
 
     pub fn code_exclude(mut self, re: regex::Regex) -> Self {
-        self.selector.exp_code_exclude = Some(re);
+        self.selector.exp_code_exclude.push(re);
         self
     }
 
     pub fn code_include(mut self, re: regex::Regex) -> Self {
-        self.selector.exp_code_include = Some(re);
+        self.selector.exp_code_include.push(re);
         self
     }
 
     pub fn type_exclude(mut self, re: regex::Regex) -> Self {
-        self.selector.exp_type_exclude = Some(re);
+        self.selector.exp_type_exclude.push(re);
         self
     }
 
     pub fn type_include(mut self, re: regex::Regex) -> Self {
-        self.selector.exp_type_include = Some(re);
+        self.selector.exp_type_include.push(re);
         self
     }
 

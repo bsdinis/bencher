@@ -22,32 +22,32 @@ struct Cli {
 enum Command {
     List {
         #[arg(short, long)]
-        exclude_code_regex: Option<String>,
+        exclude_code_regex: Vec<String>,
 
         #[arg(short, long)]
-        include_code_regex: Option<String>,
+        include_code_regex: Vec<String>,
 
         #[arg(long)]
-        exclude_type_regex: Option<String>,
+        exclude_type_regex: Vec<String>,
 
         #[arg(long)]
-        include_type_regex: Option<String>,
+        include_type_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
     },
     Status {
         #[arg(short, long)]
-        exclude_code_regex: Option<String>,
+        exclude_code_regex: Vec<String>,
 
         #[arg(short, long)]
-        include_code_regex: Option<String>,
+        include_code_regex: Vec<String>,
 
         #[arg(long)]
-        exclude_type_regex: Option<String>,
+        exclude_type_regex: Vec<String>,
 
         #[arg(long)]
-        include_type_regex: Option<String>,
+        include_type_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -56,16 +56,16 @@ enum Command {
         exp_type: String,
 
         #[arg(short, long)]
-        exclude_code_regex: Option<String>,
+        exclude_code_regex: Vec<String>,
 
         #[arg(short, long)]
-        include_code_regex: Option<String>,
+        include_code_regex: Vec<String>,
 
         #[arg(long)]
-        exclude_type_regex: Option<String>,
+        exclude_type_regex: Vec<String>,
 
         #[arg(long)]
-        include_type_regex: Option<String>,
+        include_type_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -77,16 +77,16 @@ enum Command {
         file: Option<std::path::PathBuf>,
 
         #[arg(short, long)]
-        exclude_code_regex: Option<String>,
+        exclude_code_regex: Vec<String>,
 
         #[arg(short, long)]
-        include_code_regex: Option<String>,
+        include_code_regex: Vec<String>,
 
         #[arg(long)]
-        exclude_type_regex: Option<String>,
+        exclude_type_regex: Vec<String>,
 
         #[arg(long)]
-        include_type_regex: Option<String>,
+        include_type_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -106,16 +106,16 @@ enum Command {
         ybar: Option<usize>,
 
         #[arg(short, long)]
-        exclude_code_regex: Option<String>,
+        exclude_code_regex: Vec<String>,
 
         #[arg(short, long)]
-        include_code_regex: Option<String>,
+        include_code_regex: Vec<String>,
 
         #[arg(long)]
-        exclude_type_regex: Option<String>,
+        exclude_type_regex: Vec<String>,
 
         #[arg(long)]
-        include_type_regex: Option<String>,
+        include_type_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -135,16 +135,16 @@ enum Command {
         ybar: bool,
 
         #[arg(short, long)]
-        exclude_code_regex: Option<String>,
+        exclude_code_regex: Vec<String>,
 
         #[arg(long)]
-        include_code_regex: Option<String>,
+        include_code_regex: Vec<String>,
 
         #[arg(long)]
-        exclude_type_regex: Option<String>,
+        exclude_type_regex: Vec<String>,
 
         #[arg(short, long)]
-        include_type_regex: Option<String>,
+        include_type_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -164,16 +164,16 @@ enum Command {
         ybar: Option<usize>,
 
         #[arg(short, long)]
-        exclude_code_regex: Option<String>,
+        exclude_code_regex: Vec<String>,
 
         #[arg(short, long)]
-        include_code_regex: Option<String>,
+        include_code_regex: Vec<String>,
 
         #[arg(long)]
-        exclude_type_regex: Option<String>,
+        exclude_type_regex: Vec<String>,
 
         #[arg(long)]
-        include_type_regex: Option<String>,
+        include_type_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -212,44 +212,32 @@ fn get_write_config(db: Option<std::path::PathBuf>) -> Result<WriteConfig> {
 }
 
 fn build_selector(
-    exclude_code_regex: &Option<String>,
-    include_code_regex: &Option<String>,
-    exclude_type_regex: &Option<String>,
-    include_type_regex: &Option<String>,
+    exclude_code_regex: &Vec<String>,
+    include_code_regex: &Vec<String>,
+    exclude_type_regex: &Vec<String>,
+    include_type_regex: &Vec<String>,
 ) -> Result<Selector> {
-    let exclude_code_regex = exclude_code_regex
-        .as_ref()
-        .map(|re| regex::Regex::new(re))
-        .transpose()
-        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
-    let include_code_regex = include_code_regex
-        .as_ref()
-        .map(|re| regex::Regex::new(re))
-        .transpose()
-        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
-    let exclude_type_regex = exclude_type_regex
-        .as_ref()
-        .map(|re| regex::Regex::new(re))
-        .transpose()
-        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
-    let include_type_regex = include_type_regex
-        .as_ref()
-        .map(|re| regex::Regex::new(re))
-        .transpose()
-        .map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
+    let exclude_code_regex = exclude_code_regex.iter().map(|re| regex::Regex::new(re));
+    let include_code_regex = include_code_regex.iter().map(|re| regex::Regex::new(re));
+    let exclude_type_regex = exclude_type_regex.iter().map(|re| regex::Regex::new(re));
+    let include_type_regex = include_type_regex.iter().map(|re| regex::Regex::new(re));
 
     let mut builder = SelectorBuilder::new();
-    if let Some(re) = exclude_code_regex {
+    for re in exclude_code_regex {
+        let re = re.map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
         builder = builder.code_exclude(re);
     }
-    if let Some(re) = include_code_regex {
-        builder = builder.code_include(re);
+    for re in include_code_regex {
+        let re = re.map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
+        builder = builder.code_exclude(re);
     }
-    if let Some(re) = exclude_type_regex {
+    for re in exclude_type_regex {
+        let re = re.map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
         builder = builder.type_exclude(re);
     }
-    if let Some(re) = include_type_regex {
-        builder = builder.type_include(re);
+    for re in include_type_regex {
+        let re = re.map_err(|e| eyre::eyre!("regex error: {:?}", e))?;
+        builder = builder.type_exclude(re);
     }
     Ok(builder.build())
 }

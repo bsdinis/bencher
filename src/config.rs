@@ -246,8 +246,12 @@ impl ReadConfig {
         })
     }
 
-    pub fn status(&self, selector: &Selector) -> BencherResult<Vec<ExperimentStatus>> {
-        self.db.status(selector)
+    pub fn status(
+        &self,
+        selector: &Selector,
+        sorter: &Sorter,
+    ) -> BencherResult<Vec<ExperimentStatus>> {
+        self.db.status(selector, sorter)
     }
 
     pub fn list_codes(&self) -> BencherResult<Vec<String>> {
@@ -265,13 +269,19 @@ impl ReadConfig {
     pub fn list_linear_experiments(
         &self,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<Vec<LinearExperimentInfo>> {
         self.db
-            .list_linear_experiments(self.linear_experiments(), selector)
+            .list_linear_experiments(self.linear_experiments(), selector, sorter)
     }
 
-    pub fn list_xy_experiments(&self, selector: &Selector) -> BencherResult<Vec<XYExperimentInfo>> {
-        self.db.list_xy_experiments(self.xy_experiments(), selector)
+    pub fn list_xy_experiments(
+        &self,
+        selector: &Selector,
+        sorter: &Sorter,
+    ) -> BencherResult<Vec<XYExperimentInfo>> {
+        self.db
+            .list_xy_experiments(self.xy_experiments(), selector, sorter)
     }
 
     /// Linear experiments
@@ -297,10 +307,11 @@ impl ReadConfig {
         &self,
         experiment: &LinearExperiment,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<Vec<LinearExperimentSet>> {
-        let codes_labels = self
-            .db
-            .list_codes_labels_by_exp_type(&experiment.exp_type, selector)?;
+        let codes_labels =
+            self.db
+                .list_codes_labels_by_exp_type(&experiment.exp_type, selector, sorter)?;
 
         codes_labels
             .into_iter()
@@ -317,6 +328,7 @@ impl ReadConfig {
         &self,
         exp_type: &str,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<LinearExperimentView> {
         let linear_experiment = self.find_linear_experiment(exp_type).ok_or_else(|| {
             BencherError::ExperimentNotFound(
@@ -325,7 +337,7 @@ impl ReadConfig {
             )
         })?;
 
-        let sets = self.get_linear_experiment_sets(linear_experiment, selector)?;
+        let sets = self.get_linear_experiment_sets(linear_experiment, selector, sorter)?;
 
         LinearExperimentView::new(linear_experiment, sets)
     }
@@ -350,10 +362,11 @@ impl ReadConfig {
         &self,
         experiment: &XYExperiment,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<Vec<XYExperimentLine>> {
-        let codes_labels = self
-            .db
-            .list_codes_labels_by_exp_type(&experiment.exp_type, selector)?;
+        let codes_labels =
+            self.db
+                .list_codes_labels_by_exp_type(&experiment.exp_type, selector, sorter)?;
 
         codes_labels
             .into_iter()
@@ -371,12 +384,13 @@ impl ReadConfig {
         &self,
         exp_type: &str,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<XYExperimentView> {
         let xy_experiment = self.find_xy_experiment(exp_type).ok_or_else(|| {
             BencherError::ExperimentNotFound(exp_type.to_string(), self.xy_experiments_as_string())
         })?;
 
-        let lines = self.get_xy_experiment_lines(xy_experiment, selector)?;
+        let lines = self.get_xy_experiment_lines(xy_experiment, selector, sorter)?;
 
         XYExperimentView::new(xy_experiment, lines)
     }

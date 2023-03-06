@@ -98,3 +98,25 @@ impl SelectorBuilder {
         self.selector
     }
 }
+
+/// Struct to sort results
+pub struct Sorter {
+    regex: Vec<regex::Regex>,
+}
+
+impl Sorter {
+    pub fn new(regex: Vec<regex::Regex>) -> Self {
+        Sorter { regex }
+    }
+
+    /// This can be used to sort a vec
+    pub(crate) fn rank(&self, code: &str) -> usize {
+        for (rank, re) in self.regex.iter().enumerate() {
+            if re.is_match(code) {
+                return rank;
+            }
+        }
+
+        self.regex.len()
+    }
+}

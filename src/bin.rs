@@ -1,5 +1,5 @@
 use bencher::{
-    Bars, BencherError, ExperimentView, ReadConfig, Selector, SelectorBuilder, WriteConfig,
+    Bars, BencherError, ExperimentView, ReadConfig, Selector, SelectorBuilder, Sorter, WriteConfig,
 };
 
 use clap::{Parser, Subcommand};
@@ -33,6 +33,9 @@ enum Command {
         #[arg(long)]
         include_type_regex: Vec<String>,
 
+        #[arg(short, long)]
+        sort_regex: Vec<String>,
+
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
     },
@@ -48,6 +51,9 @@ enum Command {
 
         #[arg(long)]
         include_type_regex: Vec<String>,
+
+        #[arg(short, long)]
+        sort_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -66,6 +72,9 @@ enum Command {
 
         #[arg(long)]
         include_type_regex: Vec<String>,
+
+        #[arg(short, long)]
+        sort_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -87,6 +96,9 @@ enum Command {
 
         #[arg(long)]
         include_type_regex: Vec<String>,
+
+        #[arg(short, long)]
+        sort_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -117,6 +129,9 @@ enum Command {
         #[arg(long)]
         include_type_regex: Vec<String>,
 
+        #[arg(short, long)]
+        sort_regex: Vec<String>,
+
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
     },
@@ -146,6 +161,9 @@ enum Command {
         #[arg(short, long)]
         include_type_regex: Vec<String>,
 
+        #[arg(short, long)]
+        sort_regex: Vec<String>,
+
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
     },
@@ -174,6 +192,9 @@ enum Command {
 
         #[arg(long)]
         include_type_regex: Vec<String>,
+
+        #[arg(short, long)]
+        sort_regex: Vec<String>,
 
         /// Paths to DBs
         dbs: Vec<std::path::PathBuf>,
@@ -242,6 +263,14 @@ fn build_selector(
     Ok(builder.build())
 }
 
+fn build_sorter(regex: &Vec<String>) -> Result<Sorter> {
+    let vec = regex
+        .iter()
+        .map(|re| regex::Regex::new(re).map_err(|e| eyre::eyre!("regex error: {:?}", e)))
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Sorter::new(vec))
+}
+
 fn main() -> Result<()> {
     color_eyre::install()?;
 
@@ -254,6 +283,7 @@ fn main() -> Result<()> {
             include_code_regex,
             exclude_type_regex,
             include_type_regex,
+            sort_regex,
         } => {
             let selector = build_selector(
                 &exclude_code_regex,
@@ -261,8 +291,9 @@ fn main() -> Result<()> {
                 &exclude_type_regex,
                 &include_type_regex,
             )?;
+            let sorter = build_sorter(&sort_regex)?;
             let config = get_read_config(cli.default, dbs)?;
-            list(&config, &selector)?;
+            list(&config, &selector, &sorter)?;
         }
         Command::Status {
             dbs,
@@ -270,6 +301,7 @@ fn main() -> Result<()> {
             include_code_regex,
             exclude_type_regex,
             include_type_regex,
+            sort_regex,
         } => {
             let selector = build_selector(
                 &exclude_code_regex,
@@ -277,8 +309,9 @@ fn main() -> Result<()> {
                 &exclude_type_regex,
                 &include_type_regex,
             )?;
+            let sorter = build_sorter(&sort_regex)?;
             let config = get_read_config(cli.default, dbs)?;
-            status(&config, &selector)?;
+            status(&config, &selector, &sorter)?;
         }
         Command::Table {
             dbs,
@@ -286,6 +319,7 @@ fn main() -> Result<()> {
             include_code_regex,
             exclude_type_regex,
             include_type_regex,
+            sort_regex,
             exp_type,
         } => {
             let selector = build_selector(
@@ -294,8 +328,9 @@ fn main() -> Result<()> {
                 &exclude_type_regex,
                 &include_type_regex,
             )?;
+            let sorter = build_sorter(&sort_regex)?;
             let config = get_read_config(cli.default, dbs)?;
-            table(&config, &exp_type, &selector)?;
+            table(&config, &exp_type, &selector, &sorter)?;
         }
         Command::Latex {
             dbs,
@@ -303,6 +338,7 @@ fn main() -> Result<()> {
             include_code_regex,
             exclude_type_regex,
             include_type_regex,
+            sort_regex,
             exp_type,
             file,
         } => {
@@ -312,12 +348,14 @@ fn main() -> Result<()> {
                 &exclude_type_regex,
                 &include_type_regex,
             )?;
+            let sorter = build_sorter(&sort_regex)?;
             let config = get_read_config(cli.default, dbs)?;
             latex(
                 &config,
                 &exp_type,
                 file.as_ref().map(|x| x.as_path()),
                 &selector,
+                &sorter,
             )?;
         }
         Command::Dat {
@@ -326,6 +364,7 @@ fn main() -> Result<()> {
             include_code_regex,
             exclude_type_regex,
             include_type_regex,
+            sort_regex,
             exp_type,
             prefix,
             bar,
@@ -338,6 +377,7 @@ fn main() -> Result<()> {
                 &exclude_type_regex,
                 &include_type_regex,
             )?;
+            let sorter = build_sorter(&sort_regex)?;
             let config = get_read_config(cli.default, dbs)?;
             dat(
                 &config,
@@ -347,6 +387,7 @@ fn main() -> Result<()> {
                 xbar,
                 ybar,
                 &selector,
+                &sorter,
             )?;
         }
         Command::Gnuplot {
@@ -355,6 +396,7 @@ fn main() -> Result<()> {
             include_code_regex,
             exclude_type_regex,
             include_type_regex,
+            sort_regex,
             exp_type,
             prefix,
             bar,
@@ -367,8 +409,11 @@ fn main() -> Result<()> {
                 &exclude_type_regex,
                 &include_type_regex,
             )?;
+            let sorter = build_sorter(&sort_regex)?;
             let config = get_read_config(cli.default, dbs)?;
-            gnuplot(&config, &exp_type, &prefix, bar, xbar, ybar, &selector)?;
+            gnuplot(
+                &config, &exp_type, &prefix, bar, xbar, ybar, &selector, &sorter,
+            )?;
         }
         Command::Plot {
             dbs,
@@ -376,6 +421,7 @@ fn main() -> Result<()> {
             include_code_regex,
             exclude_type_regex,
             include_type_regex,
+            sort_regex,
             exp_type,
             prefix,
             bar,
@@ -388,8 +434,11 @@ fn main() -> Result<()> {
                 &exclude_type_regex,
                 &include_type_regex,
             )?;
+            let sorter = build_sorter(&sort_regex)?;
             let config = get_read_config(cli.default, dbs)?;
-            plot(&config, &exp_type, &prefix, bar, xbar, ybar, &selector)?;
+            plot(
+                &config, &exp_type, &prefix, bar, xbar, ybar, &selector, &sorter,
+            )?;
         }
         Command::Revert {
             db,
@@ -406,8 +455,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn list(config: &ReadConfig, selector: &Selector) -> Result<()> {
-    let linear_list = config.list_linear_experiments(selector)?;
+fn list(config: &ReadConfig, selector: &Selector, sorter: &Sorter) -> Result<()> {
+    let linear_list = config.list_linear_experiments(selector, sorter)?;
     let linear_table = linear_list
         .into_iter()
         .map(|e| {
@@ -436,7 +485,7 @@ fn list(config: &ReadConfig, selector: &Selector) -> Result<()> {
 
     cli_table::print_stdout(linear_table)?;
 
-    let xy_list = config.list_xy_experiments(selector)?;
+    let xy_list = config.list_xy_experiments(selector, sorter)?;
     let xy_table = xy_list
         .into_iter()
         .map(|e| {
@@ -470,9 +519,9 @@ fn list(config: &ReadConfig, selector: &Selector) -> Result<()> {
     Ok(())
 }
 
-fn status(config: &ReadConfig, selector: &Selector) -> Result<()> {
+fn status(config: &ReadConfig, selector: &Selector, sorter: &Sorter) -> Result<()> {
     let table = config
-        .status(selector)?
+        .status(selector, sorter)?
         .into_iter()
         .map(|s| {
             vec![
@@ -503,9 +552,9 @@ fn status(config: &ReadConfig, selector: &Selector) -> Result<()> {
     Ok(())
 }
 
-fn table(config: &ReadConfig, exp_type: &str, selector: &Selector) -> Result<()> {
-    let linear_view = config.linear_experiment_view(exp_type, selector);
-    let xy_view = config.xy_experiment_view(exp_type, selector);
+fn table(config: &ReadConfig, exp_type: &str, selector: &Selector, sorter: &Sorter) -> Result<()> {
+    let linear_view = config.linear_experiment_view(exp_type, selector, sorter);
+    let xy_view = config.xy_experiment_view(exp_type, selector, sorter);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -550,9 +599,10 @@ fn latex(
     exp_type: &str,
     file: Option<&std::path::Path>,
     selector: &Selector,
+    sorter: &Sorter,
 ) -> Result<()> {
-    let linear_view = config.linear_experiment_view(exp_type, selector);
-    let xy_view = config.xy_experiment_view(exp_type, selector);
+    let linear_view = config.linear_experiment_view(exp_type, selector, sorter);
+    let xy_view = config.xy_experiment_view(exp_type, selector, sorter);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -610,10 +660,11 @@ fn dat(
     xbar: Option<usize>,
     ybar: Option<usize>,
     selector: &Selector,
+    sorter: &Sorter,
 ) -> Result<()> {
     let bars = Bars::from_optionals(bar, xbar, ybar)?;
-    let linear_view = config.linear_experiment_view(exp_type, selector);
-    let xy_view = config.xy_experiment_view(exp_type, selector);
+    let linear_view = config.linear_experiment_view(exp_type, selector, sorter);
+    let xy_view = config.xy_experiment_view(exp_type, selector, sorter);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -659,11 +710,12 @@ fn gnuplot(
     xbar: bool,
     ybar: bool,
     selector: &Selector,
+    sorter: &Sorter,
 ) -> Result<()> {
     let bars = Bars::from_bools(bar, xbar, ybar)?;
 
-    let linear_view = config.linear_experiment_view(exp_type, selector);
-    let xy_view = config.xy_experiment_view(exp_type, selector);
+    let linear_view = config.linear_experiment_view(exp_type, selector, sorter);
+    let xy_view = config.xy_experiment_view(exp_type, selector, sorter);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {
@@ -709,10 +761,11 @@ fn plot(
     xbar: Option<usize>,
     ybar: Option<usize>,
     selector: &Selector,
+    sorter: &Sorter,
 ) -> Result<()> {
     let bars = Bars::from_optionals(bar, xbar, ybar)?;
-    let linear_view = config.linear_experiment_view(exp_type, selector);
-    let xy_view = config.xy_experiment_view(exp_type, selector);
+    let linear_view = config.linear_experiment_view(exp_type, selector, sorter);
+    let xy_view = config.xy_experiment_view(exp_type, selector, sorter);
 
     match (linear_view, xy_view) {
         (Ok(_), Ok(_)) => {

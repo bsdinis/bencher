@@ -634,7 +634,11 @@ impl DbReadBackend {
         Ok(vec)
     }
 
-    pub(crate) fn status(&self, selector: &Selector) -> BencherResult<Vec<ExperimentStatus>> {
+    pub(crate) fn status(
+        &self,
+        selector: &Selector,
+        sorter: &Sorter,
+    ) -> BencherResult<Vec<ExperimentStatus>> {
         let mut map = BTreeMap::new();
 
         for db in &self.dbs {
@@ -694,6 +698,7 @@ impl DbReadBackend {
 
         vector.sort_by(|a, b| a.exp_code.cmp(&b.exp_code));
         vector.sort_by(|a, b| a.database.cmp(&b.database));
+        vector.sort_by_key(|e| sorter.rank(&e.exp_code));
         Ok(vector)
     }
 
@@ -701,6 +706,7 @@ impl DbReadBackend {
         &self,
         linear_experiments: &Vec<LinearExperiment>,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<Vec<LinearExperimentInfo>> {
         let mut list = Vec::new();
 
@@ -742,6 +748,7 @@ impl DbReadBackend {
 
         list.sort_by(|a, b| a.exp_code.cmp(&b.exp_code));
         list.sort_by(|a, b| a.database.cmp(&b.database));
+        list.sort_by_key(|e| sorter.rank(&e.exp_code));
         Ok(list)
     }
 
@@ -749,6 +756,7 @@ impl DbReadBackend {
         &self,
         xy_experiments: &Vec<XYExperiment>,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<Vec<XYExperimentInfo>> {
         let mut list = Vec::new();
 
@@ -790,6 +798,7 @@ impl DbReadBackend {
 
         list.sort_by(|a, b| a.exp_code.cmp(&b.exp_code));
         list.sort_by(|a, b| a.database.cmp(&b.database));
+        list.sort_by_key(|e| sorter.rank(&e.exp_code));
         Ok(list)
     }
 
@@ -813,6 +822,7 @@ impl DbReadBackend {
         &self,
         exp_type: &str,
         selector: &Selector,
+        sorter: &Sorter,
     ) -> BencherResult<Vec<(String, String)>> {
         let mut vec = vec![];
         for db in &self.dbs {
@@ -840,6 +850,7 @@ impl DbReadBackend {
             vec.append(&mut inner);
         }
 
+        vec.sort_by_key(|e| sorter.rank(&e.0));
         Ok(vec)
     }
 }

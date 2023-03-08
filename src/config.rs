@@ -47,7 +47,7 @@ impl WriteConfig {
     /// Create a new config, looking at the default path for the filename
     pub fn new() -> BencherResult<Self> {
         let mut config_path = find_config_dir()?;
-        config_path.set_file_name(BENCHER_CONFIG_FILENAME);
+        config_path.push(BENCHER_CONFIG_FILENAME);
 
         let inner_config = ParsedConfig::from_path(&config_path)?;
         config_path.set_file_name(inner_config.default_database_filepath);

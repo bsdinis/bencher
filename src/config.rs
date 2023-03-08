@@ -8,52 +8,6 @@ use crate::*;
 pub(crate) const BENCHER_CONFIG_FILENAME: &str = ".bencher-config";
 pub(crate) const COLORS: [&str; 5] = ["f6511d", "ffb400", "00a6ed", "7fb800", "0d2c54"];
 
-/// A linear experiment represents a histogram
-///
-/// The group labels are the labels to be used of the groups in the histogram.
-/// Example: if the histogram is latency per operation,
-/// and there are two labels (A and B) and two operations (get and put),
-/// the groups are put/get
-#[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
-pub struct LinearExperiment {
-    pub exp_type: String,
-    pub horizontal_label: String,
-    pub v_label: String,
-    pub v_units: String,
-}
-
-#[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
-pub struct XYExperiment {
-    pub exp_type: String,
-    pub x_label: String,
-    pub x_units: String,
-    pub y_label: String,
-    pub y_units: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct ParsedConfig {
-    /// database filepath relative to the config filepath
-    pub default_database_filepath: String,
-
-    /// experiment descriptions
-    pub xy_experiments: Vec<XYExperiment>,
-
-    /// experiment descriptions
-    pub linear_experiments: Vec<LinearExperiment>,
-}
-
-impl ParsedConfig {
-    fn from_path(path: &std::path::Path) -> BencherResult<Self> {
-        let config_file = File::open(&path)
-            .map_err(|e| BencherError::io_err(e, format!("opening {:?}", &path)))?;
-        let reader = BufReader::new(config_file);
-        let config = serde_json::from_reader(reader)?;
-
-        Ok(config)
-    }
-}
-
 fn find_config_dir() -> BencherResult<PathBuf> {
     let mut dir: PathBuf = Path::new(".")
         .canonicalize()
@@ -169,8 +123,10 @@ impl WriteConfig {
 #[derive(Debug)]
 pub struct ReadConfig {
     db: DbReadBackend,
-    xy_experiments: Vec<XYExperiment>,
     linear_experiments: Vec<LinearExperiment>,
+    xy_experiments: Vec<XYExperiment>,
+    virtual_linear_experiments: Vec<VirtualLinearExperiment>,
+    virtual_xy_experiments: Vec<VirtualXYExperiment>,
 }
 
 impl ReadConfig {
@@ -199,8 +155,10 @@ impl ReadConfig {
 
         Ok(Self {
             db,
-            linear_experiments: inner_config.linear_experiments,
-            xy_experiments: inner_config.xy_experiments,
+            linear_experiments: inner_config.linear_experiments.unwrap_or(vec![]),
+            xy_experiments: inner_config.xy_experiments.unwrap_or(vec![]),
+            virtual_linear_experiments: inner_config.virtual_linear_experiments.unwrap_or(vec![]),
+            virtual_xy_experiments: inner_config.virtual_xy_experiments.unwrap_or(vec![]),
         })
     }
 
@@ -241,8 +199,10 @@ impl ReadConfig {
     ) -> BencherResult<Self> {
         Ok(Self {
             db: DbReadBackend::from_conns(dbs)?,
-            linear_experiments: inner_config.linear_experiments,
-            xy_experiments: inner_config.xy_experiments,
+            linear_experiments: inner_config.linear_experiments.unwrap_or(vec![]),
+            xy_experiments: inner_config.xy_experiments.unwrap_or(vec![]),
+            virtual_linear_experiments: inner_config.virtual_linear_experiments.unwrap_or(vec![]),
+            virtual_xy_experiments: inner_config.virtual_xy_experiments.unwrap_or(vec![]),
         })
     }
 
@@ -266,13 +226,25 @@ impl ReadConfig {
         &self.xy_experiments
     }
 
+    pub fn virtual_linear_experiments(&self) -> &Vec<VirtualLinearExperiment> {
+        &self.virtual_linear_experiments
+    }
+
+    pub fn virtual_xy_experiments(&self) -> &Vec<VirtualXYExperiment> {
+        &self.virtual_xy_experiments
+    }
+
     pub fn list_linear_experiments(
         &self,
         selector: &Selector,
         sorter: &Sorter,
     ) -> BencherResult<Vec<LinearExperimentInfo>> {
-        self.db
-            .list_linear_experiments(self.linear_experiments(), selector, sorter)
+        self.db.list_linear_experiments(
+            self.linear_experiments(),
+            self.virtual_linear_experiments(),
+            selector,
+            sorter,
+        )
     }
 
     pub fn list_xy_experiments(
@@ -280,8 +252,12 @@ impl ReadConfig {
         selector: &Selector,
         sorter: &Sorter,
     ) -> BencherResult<Vec<XYExperimentInfo>> {
-        self.db
-            .list_xy_experiments(self.xy_experiments(), selector, sorter)
+        self.db.list_xy_experiments(
+            self.xy_experiments(),
+            self.virtual_xy_experiments(),
+            selector,
+            sorter,
+        )
     }
 
     /// Linear experiments
@@ -293,16 +269,29 @@ impl ReadConfig {
             .find(|e| e.exp_type == exp_type)
     }
 
+    fn find_virtual_linear_experiment<'a>(
+        &'a self,
+        exp_type: &str,
+    ) -> Option<&'a VirtualLinearExperiment> {
+        self.virtual_linear_experiments
+            .iter()
+            .find(|e| e.exp_type == exp_type)
+    }
+
     fn linear_experiments_as_string(&self) -> String {
         self.linear_experiments
             .iter()
             .map(|e| e.exp_type.clone())
+            .chain(
+                self.virtual_linear_experiments
+                    .iter()
+                    .map(|e| e.exp_type.clone()),
+            )
             .collect::<Vec<String>>()
             .join(", ")
     }
 
-    /// Get the linear experiment view for a given experiment type
-    ///
+    /// Get the linear experiment sets for a given experiment type
     fn get_linear_experiment_sets(
         &self,
         experiment: &LinearExperiment,
@@ -324,22 +313,91 @@ impl ReadConfig {
             .collect::<BencherResult<_>>()
     }
 
+    /// Get the linear experiment sets for a given virtual experiment type
+    /// This is done by getting the sets for the source and then transforming them
+    fn get_virtual_linear_experiment_sets(
+        &self,
+        experiment: &VirtualLinearExperiment,
+        selector: &Selector,
+        sorter: &Sorter,
+    ) -> BencherResult<Vec<LinearExperimentSet>> {
+        fn map_linear_datapoints(
+            vec: Vec<LinearDatapoint>,
+            virtual_experiment: &VirtualLinearExperiment,
+        ) -> BencherResult<Vec<LinearDatapoint>> {
+            if vec.is_empty() {
+                return Ok(vec);
+            }
+
+            let min = vec.iter().map(|e| e.v).min().unwrap();
+            let max = vec.iter().map(|e| e.v).max().unwrap();
+            let avg = if vec.iter().all(|e| e.v.is_int()) {
+                Value::Int(
+                    vec.iter()
+                        .map(|e| e.v)
+                        .map(|x| x.to_int().unwrap())
+                        .sum::<i64>()
+                        / vec.len() as i64,
+                )
+            } else {
+                Value::Float(
+                    vec.iter()
+                        .map(|e| e.v.to_float().or(e.v.to_int().map(|x| x as f64)).unwrap())
+                        .sum::<f64>()
+                        / vec.len() as f64,
+                )
+            };
+
+            vec.into_iter()
+                .map(|dp| dp.map_expression(&virtual_experiment.operation, min, max, avg))
+                .collect::<BencherResult<Vec<_>>>()
+        }
+
+        let codes_labels =
+            self.db
+                .list_codes_labels_by_exp_type(&experiment.source_exp_type, selector, sorter)?;
+
+        codes_labels
+            .into_iter()
+            .map(|(code, label)| {
+                Ok(LinearExperimentSet {
+                    values: map_linear_datapoints(
+                        self.db.get_linear_datapoints(&code)?,
+                        experiment,
+                    )?,
+                    set_label: label,
+                })
+            })
+            .collect::<BencherResult<_>>()
+    }
+
     pub fn linear_experiment_view(
         &self,
         exp_type: &str,
         selector: &Selector,
         sorter: &Sorter,
     ) -> BencherResult<LinearExperimentView> {
-        let linear_experiment = self.find_linear_experiment(exp_type).ok_or_else(|| {
-            BencherError::ExperimentNotFound(
+        let linear_experiment = self.find_linear_experiment(exp_type);
+        let virtual_linear_experiment = self.find_virtual_linear_experiment(exp_type);
+
+        match (linear_experiment, virtual_linear_experiment) {
+            (Some(linear_experiment), _) => {
+                let sets = self.get_linear_experiment_sets(linear_experiment, selector, sorter)?;
+                LinearExperimentView::from_linear(linear_experiment, sets)
+            }
+            (None, Some(virtual_linear_experiment)) => {
+                let sets = self.get_virtual_linear_experiment_sets(
+                    virtual_linear_experiment,
+                    selector,
+                    sorter,
+                )?;
+                LinearExperimentView::from_virtual(virtual_linear_experiment, sets)
+            }
+            (None, None) => Err(BencherError::ExperimentNotFound(
                 exp_type.to_string(),
                 self.linear_experiments_as_string(),
-            )
-        })?;
-
-        let sets = self.get_linear_experiment_sets(linear_experiment, selector, sorter)?;
-
-        LinearExperimentView::new(linear_experiment, sets)
+            )),
+        }
     }
 
     /// Bidimentional experiments
@@ -349,15 +407,26 @@ impl ReadConfig {
         self.xy_experiments.iter().find(|e| e.exp_type == exp_type)
     }
 
+    fn find_virtual_xy_experiment<'a>(&'a self, exp_type: &str) -> Option<&'a VirtualXYExperiment> {
+        self.virtual_xy_experiments
+            .iter()
+            .find(|e| e.exp_type == exp_type)
+    }
+
     fn xy_experiments_as_string(&self) -> String {
         self.xy_experiments
             .iter()
             .map(|e| e.exp_type.clone())
+            .chain(
+                self.virtual_xy_experiments
+                    .iter()
+                    .map(|e| e.exp_type.clone()),
+            )
             .collect::<Vec<String>>()
             .join(", ")
     }
 
-    /// Get the xy experiment view for a given experiment type
+    /// Get the xy experiment sets for a given experiment type
     fn get_xy_experiment_lines(
         &self,
         experiment: &XYExperiment,
@@ -379,6 +448,90 @@ impl ReadConfig {
             .collect::<BencherResult<_>>()
     }
 
+    /// Get the xy experiment sets for a given virtual experiment type
+    /// This is done by getting the source sets and then applying the transformation
+    fn get_virtual_xy_experiment_lines(
+        &self,
+        experiment: &VirtualXYExperiment,
+        selector: &Selector,
+        sorter: &Sorter,
+    ) -> BencherResult<Vec<XYExperimentLine>> {
+        fn map_xy_datapoints(
+            vec: Vec<XYDatapoint>,
+            virtual_experiment: &VirtualXYExperiment,
+        ) -> BencherResult<Vec<XYDatapoint>> {
+            if vec.is_empty() {
+                return Ok(vec);
+            }
+
+            let x_min = vec.iter().map(|e| e.x).min().unwrap();
+            let x_max = vec.iter().map(|e| e.x).max().unwrap();
+            let x_avg = if vec.iter().all(|e| e.x.is_int()) {
+                Value::Int(
+                    vec.iter()
+                        .map(|e| e.x)
+                        .map(|x| x.to_int().unwrap())
+                        .sum::<i64>()
+                        / vec.len() as i64,
+                )
+            } else {
+                Value::Float(
+                    vec.iter()
+                        .map(|e| e.x.to_float().or(e.x.to_int().map(|x| x as f64)).unwrap())
+                        .sum::<f64>()
+                        / vec.len() as f64,
+                )
+            };
+
+            let y_min = vec.iter().map(|e| e.y).min().unwrap();
+            let y_max = vec.iter().map(|e| e.y).max().unwrap();
+            let y_avg = if vec.iter().all(|e| e.y.is_int()) {
+                Value::Int(
+                    vec.iter()
+                        .map(|e| e.y)
+                        .map(|x| x.to_int().unwrap())
+                        .sum::<i64>()
+                        / vec.len() as i64,
+                )
+            } else {
+                Value::Float(
+                    vec.iter()
+                        .map(|e| e.y.to_float().or(e.y.to_int().map(|x| x as f64)).unwrap())
+                        .sum::<f64>()
+                        / vec.len() as f64,
+                )
+            };
+
+            vec.into_iter()
+                .map(|dp| {
+                    dp.map_expression(
+                        virtual_experiment.x_operation.as_ref().map(|x| x.as_str()),
+                        virtual_experiment.y_operation.as_ref().map(|x| x.as_str()),
+                        x_min,
+                        x_max,
+                        x_avg,
+                        y_min,
+                        y_max,
+                        y_avg,
+                    )
+                })
+                .collect::<BencherResult<Vec<_>>>()
+        }
+        let codes_labels =
+            self.db
+                .list_codes_labels_by_exp_type(&experiment.source_exp_type, selector, sorter)?;
+
+        codes_labels
+            .into_iter()
+            .map(|(code, label)| {
+                Ok(XYExperimentLine {
+                    values: map_xy_datapoints(self.db.get_xy_datapoints(&code)?, experiment)?,
+                    line_label: label,
+                })
+            })
+            .collect::<BencherResult<_>>()
+    }
+
     /// Get the xy experiment view for a given experiment type
     pub fn xy_experiment_view(
         &self,
@@ -386,12 +539,23 @@ impl ReadConfig {
         selector: &Selector,
         sorter: &Sorter,
     ) -> BencherResult<XYExperimentView> {
-        let xy_experiment = self.find_xy_experiment(exp_type).ok_or_else(|| {
-            BencherError::ExperimentNotFound(exp_type.to_string(), self.xy_experiments_as_string())
-        })?;
+        let xy_experiment = self.find_xy_experiment(exp_type);
+        let virtual_xy_experiment = self.find_virtual_xy_experiment(exp_type);
 
-        let lines = self.get_xy_experiment_lines(xy_experiment, selector, sorter)?;
-
-        XYExperimentView::new(xy_experiment, lines)
+        match (xy_experiment, virtual_xy_experiment) {
+            (Some(xy_experiment), _) => {
+                let sets = self.get_xy_experiment_lines(xy_experiment, selector, sorter)?;
+                XYExperimentView::from_xy(xy_experiment, sets)
+            }
+            (None, Some(virtual_xy_experiment)) => {
+                let sets =
+                    self.get_virtual_xy_experiment_lines(virtual_xy_experiment, selector, sorter)?;
+                XYExperimentView::from_virtual(virtual_xy_experiment, sets)
+            }
+            (None, None) => Err(BencherError::ExperimentNotFound(
+                exp_type.to_string(),
+                self.xy_experiments_as_string(),
+            )),
+        }
     }
 }

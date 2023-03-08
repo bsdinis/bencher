@@ -153,6 +153,16 @@ impl DbWriteBackend {
         result
     }
 
+    pub(crate) fn get_new_linear_tag(&self, exp_code: &str) -> BencherResult<isize> {
+        self.db
+            .query_row(
+                "select max(tag) + 1 from linear_results where experiment_code = :code",
+                rusqlite::named_params! { ":code": exp_code },
+                |row| Ok(row.get(0).unwrap_or(0)),
+            )
+            .map_err(|e| e.into())
+    }
+
     // get the new version for a given datapoint
     fn get_new_linear_version(&self, exp_code: &str, group: &str) -> BencherResult<isize> {
         let new_version = self.db.query_row(
@@ -174,6 +184,7 @@ impl DbWriteBackend {
             "insert into linear_results (
                     experiment_code,
                     version,
+                    tag,
                     v_group,
 
                     v_int,
@@ -198,6 +209,7 @@ impl DbWriteBackend {
                 ) values (
                     :experiment_code,
                     :version,
+                    :tag,
                     :v_group,
 
                     :v_int,
@@ -225,34 +237,35 @@ impl DbWriteBackend {
         stmt.execute(rusqlite::named_params! {
             ":experiment_code": exp_code,
             ":v_group": datapoint.group,
+            ":tag": datapoint.tag.unwrap(),
             ":version": version,
 
             ":v_int": datapoint.v.to_int(),
             ":v_float": datapoint.v.to_float(),
 
-            ":v_int_1": datapoint.get_confidence(1).clone().map(|val| val.0.to_int()).flatten(),
-            ":v_int_99": datapoint.get_confidence(1).clone().map(|val| val.1.to_int()).flatten(),
+            ":v_int_1": datapoint.get_confidence(Confidence::One).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_99": datapoint.get_confidence(Confidence::One).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":v_int_5": datapoint.get_confidence(5).clone().map(|val| val.0.to_int()).flatten(),
-            ":v_int_95": datapoint.get_confidence(5).clone().map(|val| val.1.to_int()).flatten(),
+            ":v_int_5": datapoint.get_confidence(Confidence::Five).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_95": datapoint.get_confidence(Confidence::Five).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":v_int_10": datapoint.get_confidence(10).clone().map(|val| val.0.to_int()).flatten(),
-            ":v_int_90": datapoint.get_confidence(10).clone().map(|val| val.1.to_int()).flatten(),
+            ":v_int_10": datapoint.get_confidence(Confidence::Ten).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_90": datapoint.get_confidence(Confidence::Ten).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":v_int_25": datapoint.get_confidence(25).clone().map(|val| val.0.to_int()).flatten(),
-            ":v_int_75": datapoint.get_confidence(25).clone().map(|val| val.1.to_int()).flatten(),
+            ":v_int_25": datapoint.get_confidence(Confidence::TwentyFive).clone().map(|val| val.0.to_int()).flatten(),
+            ":v_int_75": datapoint.get_confidence(Confidence::TwentyFive).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":v_float_1": datapoint.get_confidence(1).clone().map(|val| val.0.to_float()).flatten(),
-            ":v_float_99": datapoint.get_confidence(1).clone().map(|val| val.1.to_float()).flatten(),
+            ":v_float_1": datapoint.get_confidence(Confidence::One).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_99": datapoint.get_confidence(Confidence::One).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":v_float_5": datapoint.get_confidence(5).clone().map(|val| val.0.to_float()).flatten(),
-            ":v_float_95": datapoint.get_confidence(5).clone().map(|val| val.1.to_float()).flatten(),
+            ":v_float_5": datapoint.get_confidence(Confidence::Five).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_95": datapoint.get_confidence(Confidence::Five).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":v_float_10": datapoint.get_confidence(10).clone().map(|val| val.0.to_float()).flatten(),
-            ":v_float_90": datapoint.get_confidence(10).clone().map(|val| val.1.to_float()).flatten(),
+            ":v_float_10": datapoint.get_confidence(Confidence::Ten).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_90": datapoint.get_confidence(Confidence::Ten).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":v_float_25": datapoint.get_confidence(25).clone().map(|val| val.0.to_float()).flatten(),
-            ":v_float_75": datapoint.get_confidence(25).clone().map(|val| val.1.to_float()).flatten(),
+            ":v_float_25": datapoint.get_confidence(Confidence::TwentyFive).clone().map(|val| val.0.to_float()).flatten(),
+            ":v_float_75": datapoint.get_confidence(Confidence::TwentyFive).clone().map(|val| val.1.to_float()).flatten(),
         })?;
         Ok(())
     }
@@ -402,53 +415,53 @@ impl DbWriteBackend {
             ":y_int": datapoint.y.to_int(),
             ":y_float": datapoint.y.to_float(),
 
-            ":x_int_1": datapoint.get_x_confidence(1).clone().map(|val| val.0.to_int()).flatten(),
-            ":x_int_99": datapoint.get_x_confidence(1).clone().map(|val| val.1.to_int()).flatten(),
+            ":x_int_1": datapoint.get_x_confidence(1.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":x_int_99": datapoint.get_x_confidence(1.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":x_int_5": datapoint.get_x_confidence(5).clone().map(|val| val.0.to_int()).flatten(),
-            ":x_int_95": datapoint.get_x_confidence(5).clone().map(|val| val.1.to_int()).flatten(),
+            ":x_int_5": datapoint.get_x_confidence(5.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":x_int_95": datapoint.get_x_confidence(5.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":x_int_10": datapoint.get_x_confidence(10).clone().map(|val| val.0.to_int()).flatten(),
-            ":x_int_90": datapoint.get_x_confidence(10).clone().map(|val| val.1.to_int()).flatten(),
+            ":x_int_10": datapoint.get_x_confidence(10.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":x_int_90": datapoint.get_x_confidence(10.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":x_int_25": datapoint.get_x_confidence(25).clone().map(|val| val.0.to_int()).flatten(),
-            ":x_int_75": datapoint.get_x_confidence(25).clone().map(|val| val.1.to_int()).flatten(),
+            ":x_int_25": datapoint.get_x_confidence(25.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":x_int_75": datapoint.get_x_confidence(25.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":x_float_1": datapoint.get_x_confidence(1).clone().map(|val| val.0.to_float()).flatten(),
-            ":x_float_99": datapoint.get_x_confidence(1).clone().map(|val| val.1.to_float()).flatten(),
+            ":x_float_1": datapoint.get_x_confidence(1.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":x_float_99": datapoint.get_x_confidence(1.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":x_float_5": datapoint.get_x_confidence(5).clone().map(|val| val.0.to_float()).flatten(),
-            ":x_float_95": datapoint.get_x_confidence(5).clone().map(|val| val.1.to_float()).flatten(),
+            ":x_float_5": datapoint.get_x_confidence(5.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":x_float_95": datapoint.get_x_confidence(5.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":x_float_10": datapoint.get_x_confidence(10).clone().map(|val| val.0.to_float()).flatten(),
-            ":x_float_90": datapoint.get_x_confidence(10).clone().map(|val| val.1.to_float()).flatten(),
+            ":x_float_10": datapoint.get_x_confidence(10.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":x_float_90": datapoint.get_x_confidence(10.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":x_float_25": datapoint.get_x_confidence(25).clone().map(|val| val.0.to_float()).flatten(),
-            ":x_float_75": datapoint.get_x_confidence(25).clone().map(|val| val.1.to_float()).flatten(),
+            ":x_float_25": datapoint.get_x_confidence(25.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":x_float_75": datapoint.get_x_confidence(25.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":y_int_1": datapoint.get_y_confidence(1).clone().map(|val| val.0.to_int()).flatten(),
-            ":y_int_99": datapoint.get_y_confidence(1).clone().map(|val| val.1.to_int()).flatten(),
+            ":y_int_1": datapoint.get_y_confidence(1.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":y_int_99": datapoint.get_y_confidence(1.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":y_int_5": datapoint.get_y_confidence(5).clone().map(|val| val.0.to_int()).flatten(),
-            ":y_int_95": datapoint.get_y_confidence(5).clone().map(|val| val.1.to_int()).flatten(),
+            ":y_int_5": datapoint.get_y_confidence(5.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":y_int_95": datapoint.get_y_confidence(5.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":y_int_10": datapoint.get_y_confidence(10).clone().map(|val| val.0.to_int()).flatten(),
-            ":y_int_90": datapoint.get_y_confidence(10).clone().map(|val| val.1.to_int()).flatten(),
+            ":y_int_10": datapoint.get_y_confidence(10.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":y_int_90": datapoint.get_y_confidence(10.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":y_int_25": datapoint.get_y_confidence(25).clone().map(|val| val.0.to_int()).flatten(),
-            ":y_int_75": datapoint.get_y_confidence(25).clone().map(|val| val.1.to_int()).flatten(),
+            ":y_int_25": datapoint.get_y_confidence(25.try_into().unwrap()).clone().map(|val| val.0.to_int()).flatten(),
+            ":y_int_75": datapoint.get_y_confidence(25.try_into().unwrap()).clone().map(|val| val.1.to_int()).flatten(),
 
-            ":y_float_1": datapoint.get_y_confidence(1).clone().map(|val| val.0.to_float()).flatten(),
-            ":y_float_99": datapoint.get_y_confidence(1).clone().map(|val| val.1.to_float()).flatten(),
+            ":y_float_1": datapoint.get_y_confidence(1.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":y_float_99": datapoint.get_y_confidence(1.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":y_float_5": datapoint.get_y_confidence(5).clone().map(|val| val.0.to_float()).flatten(),
-            ":y_float_95": datapoint.get_y_confidence(5).clone().map(|val| val.1.to_float()).flatten(),
+            ":y_float_5": datapoint.get_y_confidence(5.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":y_float_95": datapoint.get_y_confidence(5.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":y_float_10": datapoint.get_y_confidence(10).clone().map(|val| val.0.to_float()).flatten(),
-            ":y_float_90": datapoint.get_y_confidence(10).clone().map(|val| val.1.to_float()).flatten(),
+            ":y_float_10": datapoint.get_y_confidence(10.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":y_float_90": datapoint.get_y_confidence(10.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
 
-            ":y_float_25": datapoint.get_y_confidence(25).clone().map(|val| val.0.to_float()).flatten(),
-            ":y_float_75": datapoint.get_y_confidence(25).clone().map(|val| val.1.to_float()).flatten(),
+            ":y_float_25": datapoint.get_y_confidence(25.try_into().unwrap()).clone().map(|val| val.0.to_float()).flatten(),
+            ":y_float_75": datapoint.get_y_confidence(25.try_into().unwrap()).clone().map(|val| val.1.to_float()).flatten(),
         })?;
         Ok(())
     }
@@ -570,7 +583,7 @@ impl DbReadBackend {
                     v_int_25,   v_int_75,
                     v_float_25, v_float_75,
 
-                    max(version)
+                    tag, max(version)
              from linear_results
              where experiment_code = :code
              group by v_group
@@ -584,6 +597,7 @@ impl DbReadBackend {
         }
 
         vec.sort_by_key(|d| d.group.clone());
+        vec.sort_by_key(|d| d.tag.unwrap());
         Ok(vec)
     }
 
@@ -705,6 +719,7 @@ impl DbReadBackend {
     pub(crate) fn list_linear_experiments(
         &self,
         linear_experiments: &Vec<LinearExperiment>,
+        virtual_linear_experiments: &Vec<VirtualLinearExperiment>,
         selector: &Selector,
         sorter: &Sorter,
     ) -> BencherResult<Vec<LinearExperimentInfo>> {
@@ -719,25 +734,41 @@ impl DbReadBackend {
             let mut stmt = db.prepare(
                 "select experiments.experiment_code, experiment_label, experiment_type from experiments join linear_results on experiments.experiment_code = linear_results.experiment_code",
             )?;
-            for info in stmt.query_map([], |row| {
+            for infos in stmt.query_map([], |row| {
                 let exp_type = row.get(2).unwrap_or("".to_string());
+                let mut infos = vec![];
                 if let Some(linear_experiment) =
                     linear_experiments.iter().find(|e| e.exp_type == exp_type)
                 {
-                    Ok(Some(LinearExperimentInfo {
+                    infos.push(LinearExperimentInfo {
                         database: database.clone(),
                         exp_code: row.get(0).unwrap_or("".to_string()),
                         exp_label: row.get(1).unwrap_or("".to_string()),
-                        exp_type,
+                        exp_type: exp_type.clone(),
                         horizontal_label: linear_experiment.horizontal_label.clone(),
                         v_label: linear_experiment.v_label.clone(),
                         v_units: linear_experiment.v_units.clone(),
-                    }))
-                } else {
-                    Ok(None)
+                    });
                 }
+
+                for virt_exp in virtual_linear_experiments
+                    .iter()
+                    .filter(|v| v.source_exp_type == exp_type)
+                {
+                    infos.push(LinearExperimentInfo {
+                        database: database.clone(),
+                        exp_code: row.get(0).unwrap_or("".to_string()),
+                        exp_label: row.get(1).unwrap_or("".to_string()),
+                        exp_type: virt_exp.source_exp_type.clone(),
+                        horizontal_label: virt_exp.horizontal_label.clone(),
+                        v_label: virt_exp.v_label.clone(),
+                        v_units: virt_exp.v_units.clone(),
+                    });
+                }
+
+                Ok(infos)
             })? {
-                if let Some(info) = info.unwrap() {
+                for info in infos.unwrap() {
                     if selector.filter_code(&info.exp_code) && selector.filter_type(&info.exp_type)
                     {
                         list.push(info);
@@ -755,6 +786,7 @@ impl DbReadBackend {
     pub(crate) fn list_xy_experiments(
         &self,
         xy_experiments: &Vec<XYExperiment>,
+        virtual_xy_experiments: &Vec<VirtualXYExperiment>,
         selector: &Selector,
         sorter: &Sorter,
     ) -> BencherResult<Vec<XYExperimentInfo>> {
@@ -769,25 +801,42 @@ impl DbReadBackend {
             let mut stmt = db.prepare(
                 "select experiments.experiment_code, experiment_label, experiment_type from experiments join xy_results on experiments.experiment_code = xy_results.experiment_code",
             )?;
-            for info in stmt.query_map([], |row| {
+            for infos in stmt.query_map([], |row| {
                 let exp_type = row.get(2).unwrap_or("".to_string());
+                let mut infos = vec![];
                 if let Some(xy_experiment) = xy_experiments.iter().find(|e| e.exp_type == exp_type)
                 {
-                    Ok(Some(XYExperimentInfo {
+                    infos.push(XYExperimentInfo {
                         database: database.clone(),
                         exp_code: row.get(0).unwrap_or("".to_string()),
                         exp_label: row.get(1).unwrap_or("".to_string()),
-                        exp_type,
+                        exp_type: exp_type.clone(),
                         x_label: xy_experiment.x_label.clone(),
                         x_units: xy_experiment.x_units.clone(),
                         y_label: xy_experiment.y_label.clone(),
                         y_units: xy_experiment.y_units.clone(),
-                    }))
-                } else {
-                    Ok(None)
+                    });
                 }
+
+                for virt_exp in virtual_xy_experiments
+                    .iter()
+                    .filter(|v| v.source_exp_type == exp_type)
+                {
+                    infos.push(XYExperimentInfo {
+                        database: database.clone(),
+                        exp_code: row.get(0).unwrap_or("".to_string()),
+                        exp_label: row.get(1).unwrap_or("".to_string()),
+                        exp_type: virt_exp.source_exp_type.clone(),
+                        x_label: virt_exp.x_label.clone(),
+                        x_units: virt_exp.x_units.clone(),
+                        y_label: virt_exp.y_label.clone(),
+                        y_units: virt_exp.y_units.clone(),
+                    });
+                }
+
+                Ok(infos)
             })? {
-                if let Some(info) = info.unwrap() {
+                for info in infos.unwrap() {
                     if selector.filter_code(&info.exp_code) && selector.filter_type(&info.exp_type)
                     {
                         list.push(info);
@@ -885,7 +934,9 @@ impl TryFrom<&rusqlite::Row<'_>> for LinearDatapoint {
             row.get(5).unwrap(),
             row.get(6).unwrap(),
         ) {
-            let _ = datapoint.add_confidence(1, e);
+            datapoint
+                .add_confidence(Confidence::One, e)
+                .expect("the type of the values should be the same");
         }
 
         // x 5 - 95
@@ -895,7 +946,9 @@ impl TryFrom<&rusqlite::Row<'_>> for LinearDatapoint {
             row.get(9).unwrap(),
             row.get(10).unwrap(),
         ) {
-            let _ = datapoint.add_confidence(5, e);
+            datapoint
+                .add_confidence(Confidence::Five, e)
+                .expect("the type of the values should be the same");
         }
 
         // x 10 - 90
@@ -905,7 +958,9 @@ impl TryFrom<&rusqlite::Row<'_>> for LinearDatapoint {
             row.get(13).unwrap(),
             row.get(14).unwrap(),
         ) {
-            let _ = datapoint.add_confidence(10, e);
+            datapoint
+                .add_confidence(Confidence::Ten, e)
+                .expect("the type of the values should be the same");
         }
 
         // x 25 - 75
@@ -915,10 +970,16 @@ impl TryFrom<&rusqlite::Row<'_>> for LinearDatapoint {
             row.get(17).unwrap(),
             row.get(18).unwrap(),
         ) {
-            let _ = datapoint.add_confidence(10, e);
+            datapoint
+                .add_confidence(Confidence::TwentyFive, e)
+                .expect("the type of the values should be the same");
         }
 
-        Ok(datapoint)
+        Ok(if let Some(tag) = row.get(19).unwrap() {
+            datapoint.tag(tag)
+        } else {
+            datapoint
+        })
     }
 }
 
@@ -937,7 +998,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(6).unwrap(),
             row.get(7).unwrap(),
         ) {
-            let _ = datapoint.add_x_confidence(1, e);
+            datapoint
+                .add_x_confidence(Confidence::One, e)
+                .expect("the type of the values should be the same");
         }
 
         // x 5 - 95
@@ -947,7 +1010,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(10).unwrap(),
             row.get(11).unwrap(),
         ) {
-            let _ = datapoint.add_x_confidence(5, e);
+            datapoint
+                .add_x_confidence(Confidence::Five, e)
+                .expect("the type of the values should be the same");
         }
 
         // x 10 - 90
@@ -957,7 +1022,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(14).unwrap(),
             row.get(15).unwrap(),
         ) {
-            let _ = datapoint.add_x_confidence(10, e);
+            datapoint
+                .add_x_confidence(Confidence::Ten, e)
+                .expect("the type of the values should be the same");
         }
 
         // x 25 - 75
@@ -967,7 +1034,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(18).unwrap(),
             row.get(19).unwrap(),
         ) {
-            let _ = datapoint.add_x_confidence(10, e);
+            datapoint
+                .add_x_confidence(Confidence::TwentyFive, e)
+                .expect("the type of the values should be the same");
         }
 
         // y 1 - 99
@@ -977,7 +1046,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(22).unwrap(),
             row.get(23).unwrap(),
         ) {
-            let _ = datapoint.add_y_confidence(1, e);
+            datapoint
+                .add_y_confidence(Confidence::One, e)
+                .expect("the type of the values should be the same");
         }
 
         // y 5 - 95
@@ -987,7 +1058,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(26).unwrap(),
             row.get(27).unwrap(),
         ) {
-            let _ = datapoint.add_y_confidence(5, e);
+            datapoint
+                .add_y_confidence(Confidence::Five, e)
+                .expect("the type of the values should be the same");
         }
 
         // y 10 - 90
@@ -997,7 +1070,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(30).unwrap(),
             row.get(31).unwrap(),
         ) {
-            let _ = datapoint.add_y_confidence(10, e);
+            datapoint
+                .add_y_confidence(Confidence::Ten, e)
+                .expect("the type of the values should be the same");
         }
 
         // y 25 - 75
@@ -1007,7 +1082,9 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
             row.get(34).unwrap(),
             row.get(35).unwrap(),
         ) {
-            let _ = datapoint.add_y_confidence(10, e);
+            datapoint
+                .add_y_confidence(Confidence::TwentyFive, e)
+                .expect("the type of the values should be the same");
         }
 
         Ok(if let Some(tag) = row.get(36).unwrap() {
@@ -1147,6 +1224,7 @@ fn setup_db(db: &rusqlite::Connection) -> BencherResult<()> {
         "create table if not exists linear_results (
             experiment_code text not null,
             v_group text not null,
+            tag int not null,
             version int not null,
 
             v_int int,

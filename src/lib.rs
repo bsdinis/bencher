@@ -6,6 +6,7 @@ mod experiment_view;
 mod handles;
 mod linear;
 mod model;
+mod parsed;
 pub mod stat;
 mod value_model;
 
@@ -17,4 +18,5 @@ pub use experiment_view::*;
 pub use handles::*;
 use linear::*;
 pub use model::*;
+use parsed::*;
 pub use value_model::*;

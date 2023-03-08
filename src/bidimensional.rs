@@ -88,8 +88,25 @@ fn choose_magnitude<'a>(
 }
 
 impl XYExperimentView {
-    pub(crate) fn new(
+    pub(crate) fn from_xy(
         experiment: &XYExperiment,
+        lines: Vec<XYExperimentLine>,
+    ) -> BencherResult<Self> {
+        if lines.len() == 0 {
+            Err(BencherError::NoLines(experiment.exp_type.clone()))
+        } else {
+            Ok(Self {
+                lines,
+                x_label: experiment.x_label.clone(),
+                x_units: experiment.x_units.clone(),
+                y_label: experiment.y_label.clone(),
+                y_units: experiment.y_units.clone(),
+            })
+        }
+    }
+
+    pub(crate) fn from_virtual(
+        experiment: &VirtualXYExperiment,
         lines: Vec<XYExperimentLine>,
     ) -> BencherResult<Self> {
         if lines.len() == 0 {
@@ -274,8 +291,9 @@ set yrange [*:*]
 
                 match bar {
                     Bars::X(c) | Bars::XY(c, _) => {
-                        let (xmin, xmax) =
-                            d.get_x_confidence(c).unwrap_or((d.x.clone(), d.x.clone()));
+                        let (xmin, xmax) = d
+                            .get_x_confidence(c.try_into()?)
+                            .unwrap_or((d.x.clone(), d.x.clone()));
                         write!(
                             &mut file,
                             " {:>8} {:>8}",
@@ -289,8 +307,9 @@ set yrange [*:*]
 
                 match bar {
                     Bars::Y(c) | Bars::XY(_, c) => {
-                        let (ymin, ymax) =
-                            d.get_y_confidence(c).unwrap_or((d.y.clone(), d.y.clone()));
+                        let (ymin, ymax) = d
+                            .get_y_confidence(c.try_into()?)
+                            .unwrap_or((d.y.clone(), d.y.clone()));
                         write!(
                             &mut file,
                             " {:>8} {:>8}",

@@ -28,8 +28,26 @@ pub struct LinearExperimentView {
 }
 
 impl LinearExperimentView {
-    pub(crate) fn new(
+    pub(crate) fn from_linear(
         experiment: &LinearExperiment,
+        sets: Vec<LinearExperimentSet>,
+    ) -> BencherResult<Self> {
+        if sets.len() == 0 {
+            Err(BencherError::NoSets(experiment.exp_type.clone()))
+        } else {
+            let magnitude = choose_magnitude(sets.iter());
+            Ok(Self {
+                sets,
+                magnitude,
+                horizontal_label: experiment.horizontal_label.clone(),
+                v_label: experiment.v_label.clone(),
+                v_units: experiment.v_units.clone(),
+            })
+        }
+    }
+
+    pub(crate) fn from_virtual(
+        experiment: &VirtualLinearExperiment,
         sets: Vec<LinearExperimentSet>,
     ) -> BencherResult<Self> {
         if sets.len() == 0 {
@@ -112,7 +130,7 @@ set ylabel '{} ({}{})'
             .map_err(|e| BencherError::io_err(e, "writing gnu to file"))?,
             _ => writeln!(
                 &mut file,
-                "plot for [i=2:{}:1] '{}.dat' using i:xtic(1) title col(i)",
+                "plot for [i=2:{}:1] '{}' using i:xtic(1) title col(i)",
                 2 + self.sets.len() - 1,
                 dat_path.to_string_lossy()
             )
@@ -181,7 +199,7 @@ set ylabel '{} ({}{})'
                 match bar {
                     Bars::Linear(confidence) => {
                         let (min, max) = datapoint
-                            .get_confidence(confidence)
+                            .get_confidence(confidence.try_into()?)
                             .unwrap_or((datapoint.v.clone(), datapoint.v.clone()));
                         guard.push(min.display_with_magnitude(self.magnitude));
                         guard.push(max.display_with_magnitude(self.magnitude));

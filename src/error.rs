@@ -11,6 +11,12 @@ pub enum BencherError {
     #[error("Value cannot be empty")]
     EmptyValue,
 
+    #[error("Expression error")]
+    ExpressionError(#[from] evalexpr::EvalexprError),
+
+    #[error("Cannot convert a {0:?} into a bencher value")]
+    ExpressionConversionError(evalexpr::Value),
+
     #[error("SQLite error")]
     Database(#[from] rusqlite::Error),
 

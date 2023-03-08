@@ -1,4 +1,5 @@
 use either::Either;
+use evalexpr::ContextWithMutableVariables;
 use std::collections::BTreeMap;
 
 use crate::error::*;
@@ -37,8 +38,16 @@ pub enum Confidence {
     TwentyFive,
 }
 
-impl Confidence {
-    pub fn new(c: usize) -> Result<Confidence, BencherError> {
+pub const SUPPORTED_CONFIDENCES: [Confidence; 4] = [
+    Confidence::One,
+    Confidence::Five,
+    Confidence::Ten,
+    Confidence::TwentyFive,
+];
+
+impl TryFrom<usize> for Confidence {
+    type Error = BencherError;
+    fn try_from(c: usize) -> BencherResult<Confidence> {
         match c {
             1 | 99 => Ok(Confidence::One),
             5 | 95 => Ok(Confidence::Five),
@@ -49,7 +58,18 @@ impl Confidence {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+impl From<Confidence> for usize {
+    fn from(c: Confidence) -> usize {
+        match c {
+            Confidence::One => 1,
+            Confidence::Five => 5,
+            Confidence::Ten => 10,
+            Confidence::TwentyFive => 25,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
@@ -80,6 +100,26 @@ impl std::cmp::Eq for Value {}
 impl std::cmp::Ord for Value {
     fn cmp(&self, other: &Value) -> std::cmp::Ordering {
         self.partial_cmp(other).unwrap()
+    }
+}
+
+impl From<Value> for evalexpr::Value {
+    fn from(value: Value) -> evalexpr::Value {
+        match value {
+            Value::Int(i) => evalexpr::Value::Int(i),
+            Value::Float(f) => evalexpr::Value::Float(f),
+        }
+    }
+}
+
+impl TryFrom<evalexpr::Value> for Value {
+    type Error = BencherError;
+    fn try_from(value: evalexpr::Value) -> BencherResult<Value> {
+        match value {
+            evalexpr::Value::Int(i) => Ok(Value::Int(i)),
+            evalexpr::Value::Float(f) => Ok(Value::Float(f)),
+            _ => Err(BencherError::ExpressionConversionError(value)),
+        }
     }
 }
 
@@ -185,6 +225,8 @@ pub struct LinearDatapoint {
     pub v: Value,
 
     pub v_confidence: BTreeMap<Confidence, (Value, Value)>,
+
+    pub tag: Option<isize>,
 }
 
 impl LinearDatapoint {
@@ -193,6 +235,7 @@ impl LinearDatapoint {
             group: group.into(),
             v,
             v_confidence: BTreeMap::new(),
+            tag: None,
         }
     }
 
@@ -206,13 +249,13 @@ impl LinearDatapoint {
         sample.sort_unstable();
         let mut datapoint = LinearDatapoint::new(group, Value::Int(integer_median(&sample)));
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (lower, upper) = (
-                integer_percentile(&sample, *confidence),
-                integer_percentile(&sample, 100 - *confidence),
+                integer_percentile(&sample, usize::from(confidence)),
+                integer_percentile(&sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_confidence(*confidence, Either::Left((lower, upper)))
+                .add_confidence(confidence.into(), Either::Left((lower, upper)))
                 .expect("Unexpected type mismatch");
         }
 
@@ -229,13 +272,13 @@ impl LinearDatapoint {
         sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let mut datapoint = LinearDatapoint::new(group, Value::Float(float_median(&sample)));
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (lower, upper) = (
-                float_percentile(&sample, *confidence),
-                float_percentile(&sample, 100 - *confidence),
+                float_percentile(&sample, usize::from(confidence)),
+                float_percentile(&sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_confidence(*confidence, Either::Right((lower, upper)))
+                .add_confidence(confidence, Either::Right((lower, upper)))
                 .expect("Unexpected type mismatch");
         }
 
@@ -252,13 +295,13 @@ impl LinearDatapoint {
         sample.sort_unstable();
         let mut datapoint = LinearDatapoint::new(group, Value::Int(integer_avg(&sample)));
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (lower, upper) = (
-                integer_percentile(&sample, *confidence),
-                integer_percentile(&sample, 100 - *confidence),
+                integer_percentile(&sample, usize::from(confidence)),
+                integer_percentile(&sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_confidence(*confidence, Either::Left((lower, upper)))
+                .add_confidence(confidence, Either::Left((lower, upper)))
                 .expect("Unexpected type mismatch");
         }
 
@@ -275,17 +318,22 @@ impl LinearDatapoint {
         sample.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
         let mut datapoint = LinearDatapoint::new(group, Value::Float(float_avg(&sample)));
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (lower, upper) = (
-                float_percentile(&sample, *confidence),
-                float_percentile(&sample, 100 - *confidence),
+                float_percentile(&sample, usize::from(confidence)),
+                float_percentile(&sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_confidence(*confidence, Either::Right((lower, upper)))
+                .add_confidence(confidence, Either::Right((lower, upper)))
                 .expect("Unexpected type mismatch");
         }
 
         Ok(Some(datapoint))
+    }
+
+    pub fn tag(mut self, tag: isize) -> Self {
+        self.tag = Some(tag);
+        self
     }
 
     pub fn magnitude(&self) -> Magnitude {
@@ -294,10 +342,9 @@ impl LinearDatapoint {
 
     pub fn add_confidence(
         &mut self,
-        confidence: usize,
+        confidence: Confidence,
         values: Either<(i64, i64), (f64, f64)>,
-    ) -> Result<(), BencherError> {
-        let confidence = Confidence::new(confidence)?;
+    ) -> BencherResult<()> {
         if self.v.is_int() {
             if let Either::Left((lower, upper)) = values {
                 self.v_confidence
@@ -316,16 +363,73 @@ impl LinearDatapoint {
         Ok(())
     }
 
-    pub fn get_confidence(&self, confidence: usize) -> Option<(Value, Value)> {
-        let confidence = Confidence::new(confidence).ok()?;
+    fn add_value_confidence(&mut self, confidence: Confidence, values: (Value, Value)) {
+        self.v_confidence.insert(confidence, values);
+    }
+
+    pub fn get_confidence(&self, confidence: Confidence) -> Option<(Value, Value)> {
         self.v_confidence.get(&confidence).cloned()
+    }
+
+    pub fn map_expression(
+        &self,
+        expr: &str,
+        global_min: Value,
+        global_max: Value,
+        global_avg: Value,
+    ) -> BencherResult<LinearDatapoint> {
+        fn get_context(
+            value: Value,
+            min: Value,
+            max: Value,
+            avg: Value,
+        ) -> BencherResult<evalexpr::HashMapContext> {
+            let value: evalexpr::Value = value.into();
+            let mut ctx = evalexpr::HashMapContext::new();
+            ctx.set_value("v".to_string(), value.clone())?;
+            ctx.set_value("V".to_string(), value)?;
+            ctx.set_value("min".to_string(), min.into())?;
+            ctx.set_value("max".to_string(), max.into())?;
+            ctx.set_value("avg".to_string(), avg.into())?;
+            // TODO: add tag
+
+            Ok(ctx)
+        }
+        // build basic datapoint
+        let ctx = get_context(self.v, global_min, global_max, global_avg)?;
+        let new_v: Value = evalexpr::eval_with_context(expr, &ctx)?.try_into()?;
+        let mut new_datapoint = LinearDatapoint::new(self.group.clone(), new_v);
+
+        for c in SUPPORTED_CONFIDENCES {
+            if let Some((min, max)) = self.v_confidence.get(&c) {
+                let new_min: BencherResult<BencherResult<Value>> = {
+                    let ctx = get_context(min.clone(), global_min, global_max, global_avg)?;
+                    evalexpr::eval_with_context(expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_min = new_min??;
+
+                let new_max: BencherResult<BencherResult<Value>> = {
+                    let ctx = get_context(max.clone(), global_min, global_max, global_avg)?;
+                    evalexpr::eval_with_context(expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_max = new_max??;
+
+                new_datapoint.add_value_confidence(c, (new_min, new_max));
+            }
+        }
+
+        Ok(new_datapoint)
     }
 }
 
 impl std::fmt::Display for LinearDatapoint {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        for c in [5, 10, 25, 1] {
-            if let Some((min, max)) = self.v_confidence.get(&Confidence::new(c).unwrap()) {
+        for c in SUPPORTED_CONFIDENCES {
+            if let Some((min, max)) = self.v_confidence.get(&c) {
                 return write!(f, "{}: {} ([{};{}])", self.group, self.v, min, max);
             }
         }
@@ -363,6 +467,7 @@ impl XYDatapoint {
             group: group.into(),
             v: self.x.clone(),
             v_confidence: self.x_confidence.clone(),
+            tag: self.tag,
         }
     }
 
@@ -371,6 +476,7 @@ impl XYDatapoint {
             group: group.into(),
             v: self.y.clone(),
             v_confidence: self.y_confidence.clone(),
+            tag: self.tag,
         }
     }
 
@@ -388,20 +494,20 @@ impl XYDatapoint {
             Value::Int(integer_median(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                integer_percentile(&x_sample, *confidence),
-                integer_percentile(&x_sample, 100 - *confidence),
+                integer_percentile(&x_sample, usize::from(confidence)),
+                integer_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                integer_percentile(&y_sample, *confidence),
-                integer_percentile(&y_sample, 100 - *confidence),
+                integer_percentile(&y_sample, usize::from(confidence)),
+                integer_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Left((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Left((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -421,20 +527,20 @@ impl XYDatapoint {
             Value::Float(float_median(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                integer_percentile(&x_sample, *confidence),
-                integer_percentile(&x_sample, 100 - *confidence),
+                integer_percentile(&x_sample, usize::from(confidence)),
+                integer_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                float_percentile(&y_sample, *confidence),
-                float_percentile(&y_sample, 100 - *confidence),
+                float_percentile(&y_sample, usize::from(confidence)),
+                float_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Left((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Right((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -454,20 +560,20 @@ impl XYDatapoint {
             Value::Int(integer_median(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                float_percentile(&x_sample, *confidence),
-                float_percentile(&x_sample, 100 - *confidence),
+                float_percentile(&x_sample, usize::from(confidence)),
+                float_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                integer_percentile(&y_sample, *confidence),
-                integer_percentile(&y_sample, 100 - *confidence),
+                integer_percentile(&y_sample, usize::from(confidence)),
+                integer_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Right((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Left((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -487,20 +593,20 @@ impl XYDatapoint {
             Value::Float(float_median(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                float_percentile(&x_sample, *confidence),
-                float_percentile(&x_sample, 100 - *confidence),
+                float_percentile(&x_sample, usize::from(confidence)),
+                float_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                float_percentile(&y_sample, *confidence),
-                float_percentile(&y_sample, 100 - *confidence),
+                float_percentile(&y_sample, usize::from(confidence)),
+                float_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Right((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Right((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -529,20 +635,20 @@ impl XYDatapoint {
             Value::Int(integer_avg(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                integer_percentile(&x_sample, *confidence),
-                integer_percentile(&x_sample, 100 - *confidence),
+                integer_percentile(&x_sample, usize::from(confidence)),
+                integer_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                integer_percentile(&y_sample, *confidence),
-                integer_percentile(&y_sample, 100 - *confidence),
+                integer_percentile(&y_sample, usize::from(confidence)),
+                integer_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Left((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Left((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -559,20 +665,20 @@ impl XYDatapoint {
             Value::Float(float_avg(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                integer_percentile(&x_sample, *confidence),
-                integer_percentile(&x_sample, 100 - *confidence),
+                integer_percentile(&x_sample, usize::from(confidence)),
+                integer_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                float_percentile(&y_sample, *confidence),
-                float_percentile(&y_sample, 100 - *confidence),
+                float_percentile(&y_sample, usize::from(confidence)),
+                float_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Left((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Left((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Right((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -589,20 +695,20 @@ impl XYDatapoint {
             Value::Int(integer_avg(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                float_percentile(&x_sample, *confidence),
-                float_percentile(&x_sample, 100 - *confidence),
+                float_percentile(&x_sample, usize::from(confidence)),
+                float_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                integer_percentile(&y_sample, *confidence),
-                integer_percentile(&y_sample, 100 - *confidence),
+                integer_percentile(&y_sample, usize::from(confidence)),
+                integer_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Right((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Left((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Left((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -619,20 +725,20 @@ impl XYDatapoint {
             Value::Float(float_avg(&y_sample)),
         );
 
-        for confidence in [1, 5, 10, 25].iter() {
+        for confidence in SUPPORTED_CONFIDENCES {
             let (x_lower, x_upper) = (
-                float_percentile(&x_sample, *confidence),
-                float_percentile(&x_sample, 100 - *confidence),
+                float_percentile(&x_sample, usize::from(confidence)),
+                float_percentile(&x_sample, 100 - usize::from(confidence)),
             );
             let (y_lower, y_upper) = (
-                float_percentile(&y_sample, *confidence),
-                float_percentile(&y_sample, 100 - *confidence),
+                float_percentile(&y_sample, usize::from(confidence)),
+                float_percentile(&y_sample, 100 - usize::from(confidence)),
             );
             datapoint
-                .add_x_confidence(*confidence, Either::Right((x_lower, x_upper)))
+                .add_x_confidence(confidence, Either::Right((x_lower, x_upper)))
                 .expect("Unexpected type mismatch");
             datapoint
-                .add_y_confidence(*confidence, Either::Right((y_lower, y_upper)))
+                .add_y_confidence(confidence, Either::Right((y_lower, y_upper)))
                 .expect("Unexpected type mismatch");
         }
         Some(datapoint)
@@ -661,10 +767,9 @@ impl XYDatapoint {
 
     pub fn add_x_confidence(
         &mut self,
-        confidence: usize,
+        confidence: Confidence,
         values: Either<(i64, i64), (f64, f64)>,
     ) -> Result<(), BencherError> {
-        let confidence = Confidence::new(confidence)?;
         if self.x.is_int() {
             if let Either::Left((lower, upper)) = values {
                 self.x_confidence
@@ -683,12 +788,15 @@ impl XYDatapoint {
         Ok(())
     }
 
+    fn add_x_value_confidence(&mut self, confidence: Confidence, values: (Value, Value)) {
+        self.x_confidence.insert(confidence, values);
+    }
+
     pub fn add_y_confidence(
         &mut self,
-        confidence: usize,
+        confidence: Confidence,
         values: Either<(i64, i64), (f64, f64)>,
     ) -> Result<(), BencherError> {
-        let confidence = Confidence::new(confidence)?;
         if self.y.is_int() {
             if let Either::Left((lower, upper)) = values {
                 self.y_confidence
@@ -707,14 +815,165 @@ impl XYDatapoint {
         Ok(())
     }
 
-    pub fn get_x_confidence(&self, confidence: usize) -> Option<(Value, Value)> {
-        let confidence = Confidence::new(confidence).ok()?;
+    fn add_y_value_confidence(&mut self, confidence: Confidence, values: (Value, Value)) {
+        self.y_confidence.insert(confidence, values);
+    }
+
+    pub fn get_x_confidence(&self, confidence: Confidence) -> Option<(Value, Value)> {
         self.x_confidence.get(&confidence).cloned()
     }
 
-    pub fn get_y_confidence(&self, confidence: usize) -> Option<(Value, Value)> {
-        let confidence = Confidence::new(confidence).ok()?;
+    pub fn get_y_confidence(&self, confidence: Confidence) -> Option<(Value, Value)> {
         self.y_confidence.get(&confidence).cloned()
+    }
+
+    pub fn map_expression(
+        &self,
+        x_expr: Option<&str>,
+        y_expr: Option<&str>,
+        global_x_min: Value,
+        global_x_max: Value,
+        global_x_avg: Value,
+        global_y_min: Value,
+        global_y_max: Value,
+        global_y_avg: Value,
+    ) -> BencherResult<XYDatapoint> {
+        fn get_context(
+            xvalue: Value,
+            yvalue: Value,
+            xmin: Value,
+            xmax: Value,
+            xavg: Value,
+            ymin: Value,
+            ymax: Value,
+            yavg: Value,
+            tag: isize,
+        ) -> BencherResult<evalexpr::HashMapContext> {
+            let mut ctx = evalexpr::HashMapContext::new();
+            let xvalue: evalexpr::Value = xvalue.into();
+            let yvalue: evalexpr::Value = yvalue.into();
+            ctx.set_value("x".to_string(), xvalue.clone())?;
+            ctx.set_value("X".to_string(), xvalue)?;
+            ctx.set_value("y".to_string(), yvalue.clone())?;
+            ctx.set_value("Y".to_string(), yvalue)?;
+            ctx.set_value("xmin".to_string(), xmin.into())?;
+            ctx.set_value("xmax".to_string(), xmax.into())?;
+            ctx.set_value("xavg".to_string(), xavg.into())?;
+            ctx.set_value("ymin".to_string(), ymin.into())?;
+            ctx.set_value("ymax".to_string(), ymax.into())?;
+            ctx.set_value("yavg".to_string(), yavg.into())?;
+            ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
+
+            // TODO: add min, max and avg
+            Ok(ctx)
+        }
+
+        // build basic datapoint
+        let x_expr = x_expr.unwrap_or("x");
+        let y_expr = y_expr.unwrap_or("y");
+
+        let ctx = get_context(
+            self.x,
+            self.y,
+            global_x_min,
+            global_x_max,
+            global_x_avg,
+            global_y_min,
+            global_y_max,
+            global_y_avg,
+            self.tag.unwrap(),
+        )?;
+        let new_x: Value = evalexpr::eval_with_context(x_expr, &ctx)?.try_into()?;
+        let new_y: Value = evalexpr::eval_with_context(y_expr, &ctx)?.try_into()?;
+        let mut new_datapoint = XYDatapoint::new(new_x, new_y);
+
+        for c in SUPPORTED_CONFIDENCES {
+            if let Some((x_min, x_max)) = self.x_confidence.get(&c.try_into().unwrap()) {
+                let new_x_min: BencherResult<BencherResult<Value>> = {
+                    let ctx = get_context(
+                        x_min.clone(),
+                        self.y,
+                        global_x_min,
+                        global_x_max,
+                        global_x_avg,
+                        global_y_min,
+                        global_y_max,
+                        global_y_avg,
+                        self.tag.unwrap(),
+                    )?;
+                    evalexpr::eval_with_context(x_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_x_min = new_x_min??;
+
+                let new_x_max: BencherResult<BencherResult<Value>> = {
+                    let ctx = get_context(
+                        x_max.clone(),
+                        self.y,
+                        global_x_min,
+                        global_x_max,
+                        global_x_avg,
+                        global_y_min,
+                        global_y_max,
+                        global_y_avg,
+                        self.tag.unwrap(),
+                    )?;
+                    evalexpr::eval_with_context(x_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_x_max = new_x_max??;
+
+                new_datapoint.add_x_value_confidence(c, (new_x_min, new_x_max));
+            }
+
+            if let Some((y_min, y_max)) = self.y_confidence.get(&c.try_into().unwrap()) {
+                let new_y_min: BencherResult<BencherResult<Value>> = {
+                    let ctx = get_context(
+                        self.x,
+                        y_min.clone(),
+                        global_x_min,
+                        global_x_max,
+                        global_x_avg,
+                        global_y_min,
+                        global_y_max,
+                        global_y_avg,
+                        self.tag.unwrap(),
+                    )?;
+                    evalexpr::eval_with_context(y_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_y_min = new_y_min??;
+
+                let new_y_max: BencherResult<BencherResult<Value>> = {
+                    let ctx = get_context(
+                        self.x,
+                        y_max.clone(),
+                        global_x_min,
+                        global_x_max,
+                        global_x_avg,
+                        global_y_min,
+                        global_y_max,
+                        global_y_avg,
+                        self.tag.unwrap(),
+                    )?;
+                    evalexpr::eval_with_context(y_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_y_max = new_y_max??;
+
+                new_datapoint.add_y_value_confidence(c, (new_y_min, new_y_max));
+            }
+        }
+
+        Ok(if let Some(tag) = self.tag {
+            new_datapoint.tag(tag)
+        } else {
+            new_datapoint
+        })
     }
 }
 
@@ -722,8 +981,8 @@ impl std::fmt::Display for XYDatapoint {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         let x_interval = {
             let mut interval = None;
-            for c in [5, 10, 25, 1] {
-                if let Some((min, max)) = self.x_confidence.get(&Confidence::new(c).unwrap()) {
+            for c in SUPPORTED_CONFIDENCES {
+                if let Some((min, max)) = self.x_confidence.get(&c) {
                     interval = Some((min, max));
                     break;
                 }
@@ -733,8 +992,8 @@ impl std::fmt::Display for XYDatapoint {
 
         let y_interval = {
             let mut interval = None;
-            for c in [5, 10, 25, 1] {
-                if let Some((min, max)) = self.y_confidence.get(&Confidence::new(c).unwrap()) {
+            for c in SUPPORTED_CONFIDENCES {
+                if let Some((min, max)) = self.y_confidence.get(&c) {
                     interval = Some((min, max));
                     break;
                 }
@@ -788,18 +1047,51 @@ mod test {
 
     #[test]
     fn confidence() {
-        assert!(Confidence::new(0).is_err());
-        assert!(Confidence::new(14).is_err());
-        assert!(Confidence::new(50).is_err());
+        {
+            let c: BencherResult<Confidence> = (0 as usize).try_into();
+            assert!(c.is_err())
+        };
+        {
+            let c: BencherResult<Confidence> = (14 as usize).try_into();
+            assert!(c.is_err())
+        };
+        {
+            let c: BencherResult<Confidence> = (50 as usize).try_into();
+            assert!(c.is_err())
+        };
 
-        assert_eq!(Confidence::new(1).unwrap(), Confidence::One);
-        assert_eq!(Confidence::new(5).unwrap(), Confidence::Five);
-        assert_eq!(Confidence::new(10).unwrap(), Confidence::Ten);
-        assert_eq!(Confidence::new(25).unwrap(), Confidence::TwentyFive);
-        assert_eq!(Confidence::new(99).unwrap(), Confidence::One);
-        assert_eq!(Confidence::new(95).unwrap(), Confidence::Five);
-        assert_eq!(Confidence::new(90).unwrap(), Confidence::Ten);
-        assert_eq!(Confidence::new(75).unwrap(), Confidence::TwentyFive);
+        {
+            let c: Confidence = (1 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::One)
+        };
+        {
+            let c: Confidence = (5 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::Five)
+        };
+        {
+            let c: Confidence = (10 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::Ten)
+        };
+        {
+            let c: Confidence = (25 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::TwentyFive)
+        };
+        {
+            let c: Confidence = (99 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::One)
+        };
+        {
+            let c: Confidence = (95 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::Five)
+        };
+        {
+            let c: Confidence = (90 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::Ten)
+        };
+        {
+            let c: Confidence = (75 as usize).try_into().unwrap();
+            assert_eq!(c, Confidence::TwentyFive)
+        };
     }
 
     #[test]
@@ -875,25 +1167,6 @@ mod test {
     }
 
     #[test]
-    fn linear_datapoint_confidence() {
-        assert!(LinearDatapoint::new("", Value::Int(0))
-            .add_confidence(0, Either::Left((0, 0)))
-            .is_err());
-        assert!(LinearDatapoint::new("", Value::Int(0))
-            .add_confidence(1, Either::Left((0, 0)))
-            .is_ok());
-        assert!(LinearDatapoint::new("", Value::Int(0))
-            .add_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
-            .is_err());
-        assert!(LinearDatapoint::new("", Value::Float(0.0))
-            .add_confidence(1, Either::Left((0, 0)))
-            .is_err());
-        assert!(LinearDatapoint::new("", Value::Float(0.0))
-            .add_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
-            .is_ok());
-    }
-
-    #[test]
     fn linear_datapoint_from_sample_i64() {
         assert!(LinearDatapoint::from_sample_i64_median("", &mut vec![])
             .unwrap()
@@ -904,19 +1177,19 @@ mod test {
             .unwrap();
         assert_eq!(datapoint.v, Value::Int(50));
         assert_eq!(
-            datapoint.get_confidence(1),
+            datapoint.get_confidence(1.try_into().unwrap()),
             Some((Value::Int(1), Value::Int(99)))
         );
         assert_eq!(
-            datapoint.get_confidence(5),
+            datapoint.get_confidence(5.try_into().unwrap()),
             Some((Value::Int(5), Value::Int(95)))
         );
         assert_eq!(
-            datapoint.get_confidence(10),
+            datapoint.get_confidence(10.try_into().unwrap()),
             Some((Value::Int(10), Value::Int(90)))
         );
         assert_eq!(
-            datapoint.get_confidence(25),
+            datapoint.get_confidence(25.try_into().unwrap()),
             Some((Value::Int(25), Value::Int(75)))
         );
     }
@@ -936,38 +1209,6 @@ mod test {
             XYDatapoint::new(Value::Int(50_000_000), Value::Float(0.00005)).magnitudes(),
             (Magnitude::Mega, Magnitude::Micro)
         );
-    }
-
-    #[test]
-    fn xy_datapoint_confidence() {
-        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
-            .add_x_confidence(0, Either::Left((0, 0)))
-            .is_err());
-        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
-            .add_x_confidence(1, Either::Left((0, 0)))
-            .is_ok());
-        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
-            .add_x_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
-            .is_err());
-        assert!(XYDatapoint::new(Value::Float(0.0), Value::Int(0))
-            .add_x_confidence(1, Either::Left((0, 0)))
-            .is_err());
-        assert!(XYDatapoint::new(Value::Float(0.0), Value::Int(0))
-            .add_x_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
-            .is_ok());
-
-        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
-            .add_y_confidence(1, Either::Left((0, 0)))
-            .is_ok());
-        assert!(XYDatapoint::new(Value::Int(0), Value::Int(0))
-            .add_y_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
-            .is_err());
-        assert!(XYDatapoint::new(Value::Int(0), Value::Float(0.0))
-            .add_y_confidence(1, Either::Left((0, 0)))
-            .is_err());
-        assert!(XYDatapoint::new(Value::Int(0), Value::Float(0.0))
-            .add_y_confidence(1, Either::Right((0.0_f64, 0.0_f64)))
-            .is_ok());
     }
 
     #[test]
@@ -997,35 +1238,35 @@ mod test {
         assert_eq!(datapoint.x, Value::Int(50));
         assert_eq!(datapoint.y, Value::Int(1050));
         assert_eq!(
-            datapoint.get_x_confidence(1),
+            datapoint.get_x_confidence(1.try_into().unwrap()),
             Some((Value::Int(1), Value::Int(99)))
         );
         assert_eq!(
-            datapoint.get_x_confidence(5),
+            datapoint.get_x_confidence(5.try_into().unwrap()),
             Some((Value::Int(5), Value::Int(95)))
         );
         assert_eq!(
-            datapoint.get_x_confidence(10),
+            datapoint.get_x_confidence(10.try_into().unwrap()),
             Some((Value::Int(10), Value::Int(90)))
         );
         assert_eq!(
-            datapoint.get_x_confidence(25),
+            datapoint.get_x_confidence(25.try_into().unwrap()),
             Some((Value::Int(25), Value::Int(75)))
         );
         assert_eq!(
-            datapoint.get_y_confidence(1),
+            datapoint.get_y_confidence(1.try_into().unwrap()),
             Some((Value::Int(1001), Value::Int(1099)))
         );
         assert_eq!(
-            datapoint.get_y_confidence(5),
+            datapoint.get_y_confidence(5.try_into().unwrap()),
             Some((Value::Int(1005), Value::Int(1095)))
         );
         assert_eq!(
-            datapoint.get_y_confidence(10),
+            datapoint.get_y_confidence(10.try_into().unwrap()),
             Some((Value::Int(1010), Value::Int(1090)))
         );
         assert_eq!(
-            datapoint.get_y_confidence(25),
+            datapoint.get_y_confidence(25.try_into().unwrap()),
             Some((Value::Int(1025), Value::Int(1075)))
         );
     }

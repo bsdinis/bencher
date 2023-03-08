@@ -14,7 +14,19 @@ impl<'a> LinearSetHandle<'a> {
         }
     }
 
+    /// Tag untagged datapoint (with the next point in set)
+    fn tag_datapoint(&self, datapoint: LinearDatapoint) -> BencherResult<LinearDatapoint> {
+        if let None = &datapoint.tag {
+            let new_tag = self.db.get_new_linear_tag(&self.exp_code)?;
+
+            Ok(datapoint.tag(new_tag))
+        } else {
+            Ok(datapoint)
+        }
+    }
+
     pub fn add_datapoint(&self, datapoint: LinearDatapoint) -> BencherResult<()> {
+        let datapoint = self.tag_datapoint(datapoint)?;
         self.db.add_linear_datapoint(&self.exp_code, datapoint)
     }
 

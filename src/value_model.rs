@@ -380,6 +380,7 @@ impl LinearDatapoint {
     ) -> BencherResult<LinearDatapoint> {
         fn get_context(
             value: Value,
+            tag: isize,
             min: Value,
             max: Value,
             avg: Value,
@@ -388,22 +389,34 @@ impl LinearDatapoint {
             let mut ctx = evalexpr::HashMapContext::new();
             ctx.set_value("v".to_string(), value.clone())?;
             ctx.set_value("V".to_string(), value)?;
+            ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
             ctx.set_value("min".to_string(), min.into())?;
             ctx.set_value("max".to_string(), max.into())?;
             ctx.set_value("avg".to_string(), avg.into())?;
-            // TODO: add tag
 
             Ok(ctx)
         }
         // build basic datapoint
-        let ctx = get_context(self.v, global_min, global_max, global_avg)?;
+        let ctx = get_context(
+            self.v,
+            self.tag.unwrap(),
+            global_min,
+            global_max,
+            global_avg,
+        )?;
         let new_v: Value = evalexpr::eval_with_context(expr, &ctx)?.try_into()?;
         let mut new_datapoint = LinearDatapoint::new(self.group.clone(), new_v);
 
         for c in SUPPORTED_CONFIDENCES {
             if let Some((min, max)) = self.v_confidence.get(&c) {
                 let new_min: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(min.clone(), global_min, global_max, global_avg)?;
+                    let ctx = get_context(
+                        min.clone(),
+                        self.tag.unwrap(),
+                        global_min,
+                        global_max,
+                        global_avg,
+                    )?;
                     evalexpr::eval_with_context(expr, &ctx)
                         .map_err(|e| e.into())
                         .map(|v| v.try_into())
@@ -411,7 +424,13 @@ impl LinearDatapoint {
                 let new_min = new_min??;
 
                 let new_max: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(max.clone(), global_min, global_max, global_avg)?;
+                    let ctx = get_context(
+                        max.clone(),
+                        self.tag.unwrap(),
+                        global_min,
+                        global_max,
+                        global_avg,
+                    )?;
                     evalexpr::eval_with_context(expr, &ctx)
                         .map_err(|e| e.into())
                         .map(|v| v.try_into())
@@ -841,13 +860,13 @@ impl XYDatapoint {
         fn get_context(
             xvalue: Value,
             yvalue: Value,
+            tag: isize,
             xmin: Value,
             xmax: Value,
             xavg: Value,
             ymin: Value,
             ymax: Value,
             yavg: Value,
-            tag: isize,
         ) -> BencherResult<evalexpr::HashMapContext> {
             let mut ctx = evalexpr::HashMapContext::new();
             let xvalue: evalexpr::Value = xvalue.into();
@@ -856,15 +875,13 @@ impl XYDatapoint {
             ctx.set_value("X".to_string(), xvalue)?;
             ctx.set_value("y".to_string(), yvalue.clone())?;
             ctx.set_value("Y".to_string(), yvalue)?;
+            ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
             ctx.set_value("xmin".to_string(), xmin.into())?;
             ctx.set_value("xmax".to_string(), xmax.into())?;
             ctx.set_value("xavg".to_string(), xavg.into())?;
             ctx.set_value("ymin".to_string(), ymin.into())?;
             ctx.set_value("ymax".to_string(), ymax.into())?;
             ctx.set_value("yavg".to_string(), yavg.into())?;
-            ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
-
-            // TODO: add min, max and avg
             Ok(ctx)
         }
 
@@ -875,13 +892,13 @@ impl XYDatapoint {
         let ctx = get_context(
             self.x,
             self.y,
+            self.tag.unwrap(),
             global_x_min,
             global_x_max,
             global_x_avg,
             global_y_min,
             global_y_max,
             global_y_avg,
-            self.tag.unwrap(),
         )?;
         let new_x: Value = evalexpr::eval_with_context(x_expr, &ctx)?.try_into()?;
         let new_y: Value = evalexpr::eval_with_context(y_expr, &ctx)?.try_into()?;
@@ -893,13 +910,13 @@ impl XYDatapoint {
                     let ctx = get_context(
                         x_min.clone(),
                         self.y,
+                        self.tag.unwrap(),
                         global_x_min,
                         global_x_max,
                         global_x_avg,
                         global_y_min,
                         global_y_max,
                         global_y_avg,
-                        self.tag.unwrap(),
                     )?;
                     evalexpr::eval_with_context(x_expr, &ctx)
                         .map_err(|e| e.into())
@@ -911,13 +928,13 @@ impl XYDatapoint {
                     let ctx = get_context(
                         x_max.clone(),
                         self.y,
+                        self.tag.unwrap(),
                         global_x_min,
                         global_x_max,
                         global_x_avg,
                         global_y_min,
                         global_y_max,
                         global_y_avg,
-                        self.tag.unwrap(),
                     )?;
                     evalexpr::eval_with_context(x_expr, &ctx)
                         .map_err(|e| e.into())
@@ -933,13 +950,13 @@ impl XYDatapoint {
                     let ctx = get_context(
                         self.x,
                         y_min.clone(),
+                        self.tag.unwrap(),
                         global_x_min,
                         global_x_max,
                         global_x_avg,
                         global_y_min,
                         global_y_max,
                         global_y_avg,
-                        self.tag.unwrap(),
                     )?;
                     evalexpr::eval_with_context(y_expr, &ctx)
                         .map_err(|e| e.into())
@@ -951,13 +968,13 @@ impl XYDatapoint {
                     let ctx = get_context(
                         self.x,
                         y_max.clone(),
+                        self.tag.unwrap(),
                         global_x_min,
                         global_x_max,
                         global_x_avg,
                         global_y_min,
                         global_y_max,
                         global_y_avg,
-                        self.tag.unwrap(),
                     )?;
                     evalexpr::eval_with_context(y_expr, &ctx)
                         .map_err(|e| e.into())

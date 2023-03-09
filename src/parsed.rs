@@ -35,11 +35,12 @@ pub struct XYExperiment {
 #[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct VirtualLinearExperiment {
     pub(crate) exp_type: String,
-    pub(crate) source_exp_type: String,
+    pub(crate) source_exp_type: String, // TODO: make this a vector
     pub(crate) horizontal_label: String,
     pub(crate) v_label: String,
     pub(crate) v_units: String,
-    pub(crate) operation: String,
+    pub(crate) v_operation: Option<String>,
+    pub(crate) tag_operation: Option<String>,
 }
 
 /// A virtual bidimensional (xy) experiment
@@ -49,13 +50,14 @@ pub struct VirtualLinearExperiment {
 #[derive(serde::Deserialize, Clone, PartialEq, Eq, Debug, Hash)]
 pub struct VirtualXYExperiment {
     pub(crate) exp_type: String,
-    pub(crate) source_exp_type: String,
+    pub(crate) source_exp_type: String, // TODO: make this a vector
     pub(crate) x_label: String,
     pub(crate) x_units: String,
     pub(crate) y_label: String,
     pub(crate) y_units: String,
     pub(crate) x_operation: Option<String>,
     pub(crate) y_operation: Option<String>,
+    pub(crate) tag_operation: Option<String>,
 }
 
 #[derive(Debug, serde::Deserialize)]

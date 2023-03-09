@@ -371,73 +371,181 @@ impl LinearDatapoint {
         self.v_confidence.get(&confidence).cloned()
     }
 
-    pub fn map_expression(
+    fn get_evalexpr_context(
+        value: Value,
+        tag: isize,
+        min: Value,
+        max: Value,
+        avg: Value,
+    ) -> BencherResult<evalexpr::HashMapContext> {
+        let value: evalexpr::Value = value.into();
+        let mut ctx = evalexpr::HashMapContext::new();
+        ctx.set_value("v".to_string(), value.clone())?;
+        ctx.set_value("V".to_string(), value)?;
+        ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
+        ctx.set_value("min".to_string(), min.into())?;
+        ctx.set_value("max".to_string(), max.into())?;
+        ctx.set_value("avg".to_string(), avg.into())?;
+
+        Ok(ctx)
+    }
+
+    pub(crate) fn map_expression(
         &self,
-        expr: &str,
+        v_expr: Option<&str>,
+        tag_expr: Option<&str>,
         global_min: Value,
         global_max: Value,
         global_avg: Value,
     ) -> BencherResult<LinearDatapoint> {
-        fn get_context(
-            value: Value,
-            tag: isize,
-            min: Value,
-            max: Value,
-            avg: Value,
-        ) -> BencherResult<evalexpr::HashMapContext> {
-            let value: evalexpr::Value = value.into();
-            let mut ctx = evalexpr::HashMapContext::new();
-            ctx.set_value("v".to_string(), value.clone())?;
-            ctx.set_value("V".to_string(), value)?;
-            ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
-            ctx.set_value("min".to_string(), min.into())?;
-            ctx.set_value("max".to_string(), max.into())?;
-            ctx.set_value("avg".to_string(), avg.into())?;
+        let v_expr = v_expr.unwrap_or("v");
+        let tag_expr = tag_expr.unwrap_or("tag");
 
-            Ok(ctx)
-        }
         // build basic datapoint
-        let ctx = get_context(
+        let ctx = Self::get_evalexpr_context(
             self.v,
             self.tag.unwrap(),
             global_min,
             global_max,
             global_avg,
         )?;
-        let new_v: Value = evalexpr::eval_with_context(expr, &ctx)?.try_into()?;
-        let mut new_datapoint = LinearDatapoint::new(self.group.clone(), new_v);
+        let new_v: Value = evalexpr::eval_with_context(v_expr, &ctx)?.try_into()?;
+        let new_tag = evalexpr::eval_with_context(tag_expr, &ctx)?;
+        let new_tag = match new_tag {
+            evalexpr::Value::Int(t) => Ok(t as isize),
+            _ => Err(BencherError::ExpressionConversionError(new_tag.into())),
+        }?;
+        let mut new_datapoint = LinearDatapoint::new(self.group.clone(), new_v).tag(new_tag);
 
         for c in SUPPORTED_CONFIDENCES {
             if let Some((min, max)) = self.v_confidence.get(&c) {
                 let new_min: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(
+                    let ctx = Self::get_evalexpr_context(
                         min.clone(),
                         self.tag.unwrap(),
                         global_min,
                         global_max,
                         global_avg,
                     )?;
-                    evalexpr::eval_with_context(expr, &ctx)
+                    evalexpr::eval_with_context(v_expr, &ctx)
                         .map_err(|e| e.into())
                         .map(|v| v.try_into())
                 };
                 let new_min = new_min??;
 
                 let new_max: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(
+                    let ctx = Self::get_evalexpr_context(
                         max.clone(),
                         self.tag.unwrap(),
                         global_min,
                         global_max,
                         global_avg,
                     )?;
-                    evalexpr::eval_with_context(expr, &ctx)
+                    evalexpr::eval_with_context(v_expr, &ctx)
                         .map_err(|e| e.into())
                         .map(|v| v.try_into())
                 };
                 let new_max = new_max??;
 
                 new_datapoint.add_value_confidence(c, (new_min, new_max));
+            }
+        }
+
+        Ok(new_datapoint)
+    }
+
+    pub(crate) fn map_expression_to_xy(
+        &self,
+        x_expr: Option<&str>,
+        y_expr: Option<&str>,
+        tag_expr: Option<&str>,
+        global_min: Value,
+        global_max: Value,
+        global_avg: Value,
+    ) -> BencherResult<XYDatapoint> {
+        let x_expr = x_expr.unwrap_or("tag");
+        let y_expr = y_expr.unwrap_or("v");
+        let tag_expr = tag_expr.unwrap_or("tag");
+
+        // build basic datapoint
+        let ctx = Self::get_evalexpr_context(
+            self.v,
+            self.tag.unwrap(),
+            global_min,
+            global_max,
+            global_avg,
+        )?;
+
+        let new_x: Value = evalexpr::eval_with_context(x_expr, &ctx)?.try_into()?;
+        let new_y: Value = evalexpr::eval_with_context(y_expr, &ctx)?.try_into()?;
+        let new_tag = evalexpr::eval_with_context(tag_expr, &ctx)?;
+        let new_tag = match new_tag {
+            evalexpr::Value::Int(t) => Ok(t as isize),
+            _ => Err(BencherError::ExpressionConversionError(new_tag.into())),
+        }?;
+        let mut new_datapoint = XYDatapoint::new(new_x, new_y).tag(new_tag);
+
+        for c in SUPPORTED_CONFIDENCES {
+            if let Some((min, max)) = self.v_confidence.get(&c) {
+                let new_x_min: BencherResult<BencherResult<Value>> = {
+                    let ctx = Self::get_evalexpr_context(
+                        min.clone(),
+                        self.tag.unwrap(),
+                        global_min,
+                        global_max,
+                        global_avg,
+                    )?;
+                    evalexpr::eval_with_context(x_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_x_min = new_x_min??;
+
+                let new_x_max: BencherResult<BencherResult<Value>> = {
+                    let ctx = Self::get_evalexpr_context(
+                        max.clone(),
+                        self.tag.unwrap(),
+                        global_min,
+                        global_max,
+                        global_avg,
+                    )?;
+                    evalexpr::eval_with_context(x_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_x_max = new_x_max??;
+
+                new_datapoint.add_x_value_confidence(c, (new_x_min, new_x_max));
+
+                let new_y_min: BencherResult<BencherResult<Value>> = {
+                    let ctx = Self::get_evalexpr_context(
+                        min.clone(),
+                        self.tag.unwrap(),
+                        global_min,
+                        global_max,
+                        global_avg,
+                    )?;
+                    evalexpr::eval_with_context(y_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_y_min = new_y_min??;
+
+                let new_y_max: BencherResult<BencherResult<Value>> = {
+                    let ctx = Self::get_evalexpr_context(
+                        max.clone(),
+                        self.tag.unwrap(),
+                        global_min,
+                        global_max,
+                        global_avg,
+                    )?;
+                    evalexpr::eval_with_context(y_expr, &ctx)
+                        .map_err(|e| e.into())
+                        .map(|v| v.try_into())
+                };
+                let new_y_max = new_y_max??;
+
+                new_datapoint.add_y_value_confidence(c, (new_y_min, new_y_max));
             }
         }
 
@@ -846,10 +954,39 @@ impl XYDatapoint {
         self.y_confidence.get(&confidence).cloned()
     }
 
-    pub fn map_expression(
+    fn get_evalexpr_context(
+        xvalue: Value,
+        yvalue: Value,
+        tag: isize,
+        xmin: Value,
+        xmax: Value,
+        xavg: Value,
+        ymin: Value,
+        ymax: Value,
+        yavg: Value,
+    ) -> BencherResult<evalexpr::HashMapContext> {
+        let mut ctx = evalexpr::HashMapContext::new();
+        let xvalue: evalexpr::Value = xvalue.into();
+        let yvalue: evalexpr::Value = yvalue.into();
+        ctx.set_value("x".to_string(), xvalue.clone())?;
+        ctx.set_value("X".to_string(), xvalue)?;
+        ctx.set_value("y".to_string(), yvalue.clone())?;
+        ctx.set_value("Y".to_string(), yvalue)?;
+        ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
+        ctx.set_value("xmin".to_string(), xmin.into())?;
+        ctx.set_value("xmax".to_string(), xmax.into())?;
+        ctx.set_value("xavg".to_string(), xavg.into())?;
+        ctx.set_value("ymin".to_string(), ymin.into())?;
+        ctx.set_value("ymax".to_string(), ymax.into())?;
+        ctx.set_value("yavg".to_string(), yavg.into())?;
+        Ok(ctx)
+    }
+
+    pub(crate) fn map_expression(
         &self,
         x_expr: Option<&str>,
         y_expr: Option<&str>,
+        tag_expr: Option<&str>,
         global_x_min: Value,
         global_x_max: Value,
         global_x_avg: Value,
@@ -857,39 +994,12 @@ impl XYDatapoint {
         global_y_max: Value,
         global_y_avg: Value,
     ) -> BencherResult<XYDatapoint> {
-        fn get_context(
-            xvalue: Value,
-            yvalue: Value,
-            tag: isize,
-            xmin: Value,
-            xmax: Value,
-            xavg: Value,
-            ymin: Value,
-            ymax: Value,
-            yavg: Value,
-        ) -> BencherResult<evalexpr::HashMapContext> {
-            let mut ctx = evalexpr::HashMapContext::new();
-            let xvalue: evalexpr::Value = xvalue.into();
-            let yvalue: evalexpr::Value = yvalue.into();
-            ctx.set_value("x".to_string(), xvalue.clone())?;
-            ctx.set_value("X".to_string(), xvalue)?;
-            ctx.set_value("y".to_string(), yvalue.clone())?;
-            ctx.set_value("Y".to_string(), yvalue)?;
-            ctx.set_value("tag".to_string(), evalexpr::Value::Int(tag as i64))?;
-            ctx.set_value("xmin".to_string(), xmin.into())?;
-            ctx.set_value("xmax".to_string(), xmax.into())?;
-            ctx.set_value("xavg".to_string(), xavg.into())?;
-            ctx.set_value("ymin".to_string(), ymin.into())?;
-            ctx.set_value("ymax".to_string(), ymax.into())?;
-            ctx.set_value("yavg".to_string(), yavg.into())?;
-            Ok(ctx)
-        }
-
         // build basic datapoint
         let x_expr = x_expr.unwrap_or("x");
         let y_expr = y_expr.unwrap_or("y");
+        let tag_expr = tag_expr.unwrap_or("tag");
 
-        let ctx = get_context(
+        let ctx = Self::get_evalexpr_context(
             self.x,
             self.y,
             self.tag.unwrap(),
@@ -902,12 +1012,17 @@ impl XYDatapoint {
         )?;
         let new_x: Value = evalexpr::eval_with_context(x_expr, &ctx)?.try_into()?;
         let new_y: Value = evalexpr::eval_with_context(y_expr, &ctx)?.try_into()?;
-        let mut new_datapoint = XYDatapoint::new(new_x, new_y);
+        let new_tag = evalexpr::eval_with_context(tag_expr, &ctx)?;
+        let new_tag = match new_tag {
+            evalexpr::Value::Int(t) => Ok(t as isize),
+            _ => Err(BencherError::ExpressionConversionError(new_tag.into())),
+        }?;
+        let mut new_datapoint = XYDatapoint::new(new_x, new_y).tag(new_tag);
 
         for c in SUPPORTED_CONFIDENCES {
             if let Some((x_min, x_max)) = self.x_confidence.get(&c.try_into().unwrap()) {
                 let new_x_min: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(
+                    let ctx = Self::get_evalexpr_context(
                         x_min.clone(),
                         self.y,
                         self.tag.unwrap(),
@@ -925,7 +1040,7 @@ impl XYDatapoint {
                 let new_x_min = new_x_min??;
 
                 let new_x_max: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(
+                    let ctx = Self::get_evalexpr_context(
                         x_max.clone(),
                         self.y,
                         self.tag.unwrap(),
@@ -947,7 +1062,7 @@ impl XYDatapoint {
 
             if let Some((y_min, y_max)) = self.y_confidence.get(&c.try_into().unwrap()) {
                 let new_y_min: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(
+                    let ctx = Self::get_evalexpr_context(
                         self.x,
                         y_min.clone(),
                         self.tag.unwrap(),
@@ -965,7 +1080,7 @@ impl XYDatapoint {
                 let new_y_min = new_y_min??;
 
                 let new_y_max: BencherResult<BencherResult<Value>> = {
-                    let ctx = get_context(
+                    let ctx = Self::get_evalexpr_context(
                         self.x,
                         y_max.clone(),
                         self.tag.unwrap(),
@@ -986,11 +1101,7 @@ impl XYDatapoint {
             }
         }
 
-        Ok(if let Some(tag) = self.tag {
-            new_datapoint.tag(tag)
-        } else {
-            new_datapoint
-        })
+        Ok(new_datapoint)
     }
 }
 

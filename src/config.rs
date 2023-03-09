@@ -349,26 +349,53 @@ impl ReadConfig {
             };
 
             vec.into_iter()
-                .map(|dp| dp.map_expression(&virtual_experiment.operation, min, max, avg))
+                .map(|dp| {
+                    dp.map_expression(
+                        virtual_experiment.v_operation.as_ref().map(|x| x.as_str()),
+                        virtual_experiment
+                            .tag_operation
+                            .as_ref()
+                            .map(|x| x.as_str()),
+                        min,
+                        max,
+                        avg,
+                    )
+                })
                 .collect::<BencherResult<Vec<_>>>()
         }
 
-        let codes_labels =
-            self.db
-                .list_codes_labels_by_exp_type(&experiment.source_exp_type, selector, sorter)?;
-
-        codes_labels
-            .into_iter()
-            .map(|(code, label)| {
-                Ok(LinearExperimentSet {
-                    values: map_linear_datapoints(
-                        self.db.get_linear_datapoints(&code)?,
-                        experiment,
-                    )?,
-                    set_label: label,
+        if let Some(e) = self.find_virtual_linear_experiment(&experiment.source_exp_type) {
+            let source_sets = self.get_virtual_linear_experiment_sets(e, selector, sorter)?;
+            source_sets
+                .into_iter()
+                .map(|set| {
+                    let mut values = map_linear_datapoints(set.values, experiment)?;
+                    values.sort_by_key(|v| v.tag.unwrap());
+                    Ok(LinearExperimentSet {
+                        values,
+                        set_label: set.set_label,
+                    })
                 })
-            })
-            .collect::<BencherResult<_>>()
+                .collect::<BencherResult<Vec<_>>>()
+        } else if let Some(e) = self.find_linear_experiment(&experiment.source_exp_type) {
+            let source_sets = self.get_linear_experiment_sets(e, selector, sorter)?;
+            source_sets
+                .into_iter()
+                .map(|set| {
+                    let mut values = map_linear_datapoints(set.values, experiment)?;
+                    values.sort_by_key(|v| v.tag.unwrap());
+                    Ok(LinearExperimentSet {
+                        values,
+                        set_label: set.set_label,
+                    })
+                })
+                .collect::<BencherResult<Vec<_>>>()
+        } else {
+            Err(BencherError::ExperimentNotFound(
+                experiment.source_exp_type.clone(),
+                self.linear_experiments_as_string(),
+            ))
+        }
     }
 
     pub fn linear_experiment_view(
@@ -507,6 +534,10 @@ impl ReadConfig {
                     dp.map_expression(
                         virtual_experiment.x_operation.as_ref().map(|x| x.as_str()),
                         virtual_experiment.y_operation.as_ref().map(|x| x.as_str()),
+                        virtual_experiment
+                            .tag_operation
+                            .as_ref()
+                            .map(|x| x.as_str()),
                         x_min,
                         x_max,
                         x_avg,
@@ -517,19 +548,113 @@ impl ReadConfig {
                 })
                 .collect::<BencherResult<Vec<_>>>()
         }
-        let codes_labels =
-            self.db
-                .list_codes_labels_by_exp_type(&experiment.source_exp_type, selector, sorter)?;
 
-        codes_labels
-            .into_iter()
-            .map(|(code, label)| {
-                Ok(XYExperimentLine {
-                    values: map_xy_datapoints(self.db.get_xy_datapoints(&code)?, experiment)?,
-                    line_label: label,
+        fn map_linear_datapoints(
+            vec: Vec<LinearDatapoint>,
+            virtual_experiment: &VirtualXYExperiment,
+        ) -> BencherResult<Vec<XYDatapoint>> {
+            if vec.is_empty() {
+                return Ok(vec![]);
+            }
+
+            let min = vec.iter().map(|e| e.v).min().unwrap();
+            let max = vec.iter().map(|e| e.v).max().unwrap();
+            let avg = if vec.iter().all(|e| e.v.is_int()) {
+                Value::Int(
+                    vec.iter()
+                        .map(|e| e.v)
+                        .map(|x| x.to_int().unwrap())
+                        .sum::<i64>()
+                        / vec.len() as i64,
+                )
+            } else {
+                Value::Float(
+                    vec.iter()
+                        .map(|e| e.v.to_float().or(e.v.to_int().map(|x| x as f64)).unwrap())
+                        .sum::<f64>()
+                        / vec.len() as f64,
+                )
+            };
+
+            vec.into_iter()
+                .map(|dp| {
+                    dp.map_expression_to_xy(
+                        virtual_experiment.x_operation.as_ref().map(|x| x.as_str()),
+                        virtual_experiment.y_operation.as_ref().map(|x| x.as_str()),
+                        virtual_experiment
+                            .tag_operation
+                            .as_ref()
+                            .map(|x| x.as_str()),
+                        min,
+                        max,
+                        avg,
+                    )
                 })
-            })
-            .collect::<BencherResult<_>>()
+                .collect::<BencherResult<Vec<_>>>()
+        }
+
+        if let Some(e) = self.find_virtual_xy_experiment(&experiment.source_exp_type) {
+            let source_lines = self.get_virtual_xy_experiment_lines(e, selector, sorter)?;
+            source_lines
+                .into_iter()
+                .map(|line| {
+                    let mut values = map_xy_datapoints(line.values, experiment)?;
+                    values.sort_by_key(|v| v.tag.unwrap());
+
+                    Ok(XYExperimentLine {
+                        values,
+                        line_label: line.line_label,
+                    })
+                })
+                .collect::<BencherResult<Vec<_>>>()
+        } else if let Some(e) = self.find_virtual_linear_experiment(&experiment.source_exp_type) {
+            let source_sets = self.get_virtual_linear_experiment_sets(e, selector, sorter)?;
+            source_sets
+                .into_iter()
+                .map(|set| {
+                    let mut values = map_linear_datapoints(set.values, experiment)?;
+                    values.sort_by_key(|v| v.tag.unwrap());
+
+                    Ok(XYExperimentLine {
+                        values,
+                        line_label: set.set_label,
+                    })
+                })
+                .collect::<BencherResult<Vec<_>>>()
+        } else if let Some(e) = self.find_linear_experiment(&experiment.source_exp_type) {
+            let source_sets = self.get_linear_experiment_sets(e, selector, sorter)?;
+            source_sets
+                .into_iter()
+                .map(|set| {
+                    let mut values = map_linear_datapoints(set.values, experiment)?;
+                    values.sort_by_key(|v| v.tag.unwrap());
+
+                    Ok(XYExperimentLine {
+                        values,
+                        line_label: set.set_label,
+                    })
+                })
+                .collect::<BencherResult<Vec<_>>>()
+        } else if let Some(e) = self.find_xy_experiment(&experiment.source_exp_type) {
+            let source_lines = self.get_xy_experiment_lines(e, selector, sorter)?;
+            source_lines
+                .into_iter()
+                .map(|line| {
+                    let mut values = map_xy_datapoints(line.values, experiment)?;
+                    values.sort_by_key(|v| v.tag.unwrap());
+
+                    Ok(XYExperimentLine {
+                        values,
+                        line_label: line.line_label,
+                    })
+                })
+                .collect::<BencherResult<Vec<_>>>()
+        } else {
+            Err(BencherError::ExperimentNotFound(
+                experiment.source_exp_type.clone(),
+                self.xy_experiments_as_string(),
+            ))
+        }
     }
 
     /// Get the xy experiment view for a given experiment type

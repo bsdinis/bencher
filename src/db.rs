@@ -21,7 +21,7 @@ impl From<DbWriteBackend> for rusqlite::Connection {
 
 impl DbWriteBackend {
     pub(crate) fn new(path: &std::path::Path) -> BencherResult<Self> {
-        let db = open_db(path)?;
+        let db = open_db(path, true /* write */)?;
         setup_db(&db)?;
         Ok(DbWriteBackend { db })
     }
@@ -553,8 +553,8 @@ impl DbReadBackend {
         default_path: &std::path::Path,
         paths: impl Iterator<Item = &'a std::path::Path>,
     ) -> BencherResult<Self> {
-        let default_db = open_db(default_path)?;
-        let mut dbs = open_dbs(paths)?;
+        let default_db = open_db(default_path, false /* write */)?;
+        let mut dbs = open_dbs(paths, false /* write */)?;
         dbs.push(default_db);
         Self::from_conns(dbs)
     }
@@ -562,7 +562,7 @@ impl DbReadBackend {
     pub(crate) fn from_paths<'a>(
         paths: impl Iterator<Item = &'a std::path::Path>,
     ) -> BencherResult<Self> {
-        let dbs = open_dbs(paths)?;
+        let dbs = open_dbs(paths, false /* write */)?;
         Self::from_conns(dbs)
     }
 
@@ -1095,16 +1095,26 @@ impl TryFrom<&rusqlite::Row<'_>> for XYDatapoint {
     }
 }
 
+/// write: whether to open DB for write
 fn open_dbs<'a>(
     paths: impl Iterator<Item = &'a std::path::Path>,
+
+    write: bool,
 ) -> BencherResult<Vec<rusqlite::Connection>> {
-    paths.map(open_db).collect::<BencherResult<Vec<_>>>()
+    paths
+        .map(|x| open_db(x, write))
+        .collect::<BencherResult<Vec<_>>>()
 }
 
-fn open_db(db_path: &Path) -> BencherResult<rusqlite::Connection> {
-    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-        | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-        | rusqlite::OpenFlags::SQLITE_OPEN_CREATE;
+/// write: wether to open the DB for write
+fn open_db(db_path: &Path, write: bool) -> BencherResult<rusqlite::Connection> {
+    let flags = if write {
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
+            | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+    } else {
+        rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX | rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+    };
 
     let conn = rusqlite::Connection::open_with_flags(db_path, flags)
         .map_err(|e| BencherError::Database(e))?;

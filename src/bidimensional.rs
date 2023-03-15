@@ -206,7 +206,8 @@ set yrange [*:*]
         )
         .map_err(|e| BencherError::io_err(e, "writing gnu to file"))?;
 
-        println!(
+        write!(
+            file,
             "plot {}",
             self.lines
                 .iter()
@@ -243,7 +244,8 @@ set yrange [*:*]
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
-        );
+        )
+        .map_err(|e| BencherError::io_err(e, "writing gnu to file"))?;
         Ok(())
     }
 

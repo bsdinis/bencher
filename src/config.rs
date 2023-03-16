@@ -306,11 +306,10 @@ impl ReadConfig {
 
         codes_labels
             .into_iter()
-            .map(|(code, label)| {
-                Ok(LinearExperimentSet {
-                    values: self.db.get_linear_datapoints(&code)?,
-                    set_label: label,
-                })
+            .map(|(code, set_label)| {
+                let mut values = self.db.get_linear_datapoints(&code)?;
+                values.sort_by_key(|x| x.tag.unwrap());
+                Ok(LinearExperimentSet { values, set_label })
             })
             .collect::<BencherResult<_>>()
     }
@@ -468,11 +467,10 @@ impl ReadConfig {
 
         codes_labels
             .into_iter()
-            .map(|(code, label)| {
-                Ok(XYExperimentLine {
-                    values: self.db.get_xy_datapoints(&code)?,
-                    line_label: label,
-                })
+            .map(|(code, line_label)| {
+                let mut values = self.db.get_xy_datapoints(&code)?;
+                values.sort_by_key(|v| v.tag.unwrap());
+                Ok(XYExperimentLine { values, line_label })
             })
             .collect::<BencherResult<_>>()
     }

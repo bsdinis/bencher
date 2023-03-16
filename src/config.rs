@@ -304,14 +304,17 @@ impl ReadConfig {
             self.db
                 .list_codes_labels_by_exp_type(&experiment.exp_type, selector, sorter)?;
 
-        codes_labels
+        let mut vec = codes_labels
             .into_iter()
             .map(|(code, set_label)| {
                 let mut values = self.db.get_linear_datapoints(&code)?;
                 values.sort_by_key(|x| x.tag.unwrap());
                 Ok(LinearExperimentSet { values, set_label })
             })
-            .collect::<BencherResult<_>>()
+            .collect::<BencherResult<Vec<_>>>()?;
+
+        vec.sort_by_key(|x| x.values.iter().map(|y| y.tag.unwrap()).next().unwrap_or(0));
+        Ok(vec)
     }
 
     /// Get the linear experiment sets for a given virtual experiment type

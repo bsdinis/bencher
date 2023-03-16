@@ -2,6 +2,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
+use std::collections::HashMap;
+
 use crate::model::*;
 use crate::*;
 
@@ -549,6 +551,33 @@ impl ReadConfig {
                 .collect::<BencherResult<Vec<_>>>()
         }
 
+        fn map_linear_sets_into_xy_lines(
+            sets: Vec<LinearExperimentSet>,
+            virtual_experiment: &VirtualXYExperiment,
+        ) -> BencherResult<Vec<XYExperimentLine>> {
+            let mut group_map: HashMap<String, Vec<_>> = HashMap::new();
+            sets.into_iter()
+                .map(|set| set.values)
+                .flatten()
+                .for_each(|linear_dp| {
+                    group_map
+                        .entry(linear_dp.group.clone())
+                        .and_modify(|v| v.push(linear_dp.clone()))
+                        .or_insert(vec![linear_dp.clone()]);
+                });
+
+            group_map
+                .into_iter()
+                .map(|(group, linear_dps)| {
+                    let values = map_linear_datapoints(linear_dps, virtual_experiment)?;
+                    Ok(XYExperimentLine {
+                        values,
+                        line_label: group.to_string(),
+                    })
+                })
+                .collect::<BencherResult<Vec<_>>>()
+        }
+
         fn map_linear_datapoints(
             vec: Vec<LinearDatapoint>,
             virtual_experiment: &VirtualXYExperiment,
@@ -609,32 +638,10 @@ impl ReadConfig {
                 .collect::<BencherResult<Vec<_>>>()
         } else if let Some(e) = self.find_virtual_linear_experiment(&experiment.source_exp_type) {
             let source_sets = self.get_virtual_linear_experiment_sets(e, selector, sorter)?;
-            source_sets
-                .into_iter()
-                .map(|set| {
-                    let mut values = map_linear_datapoints(set.values, experiment)?;
-                    values.sort_by_key(|v| v.tag.unwrap());
-
-                    Ok(XYExperimentLine {
-                        values,
-                        line_label: set.set_label,
-                    })
-                })
-                .collect::<BencherResult<Vec<_>>>()
+            map_linear_sets_into_xy_lines(source_sets, experiment)
         } else if let Some(e) = self.find_linear_experiment(&experiment.source_exp_type) {
             let source_sets = self.get_linear_experiment_sets(e, selector, sorter)?;
-            source_sets
-                .into_iter()
-                .map(|set| {
-                    let mut values = map_linear_datapoints(set.values, experiment)?;
-                    values.sort_by_key(|v| v.tag.unwrap());
-
-                    Ok(XYExperimentLine {
-                        values,
-                        line_label: set.set_label,
-                    })
-                })
-                .collect::<BencherResult<Vec<_>>>()
+            map_linear_sets_into_xy_lines(source_sets, experiment)
         } else if let Some(e) = self.find_xy_experiment(&experiment.source_exp_type) {
             let source_lines = self.get_xy_experiment_lines(e, selector, sorter)?;
             source_lines

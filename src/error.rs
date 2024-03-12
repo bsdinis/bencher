@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use rusqlite;
 use thiserror::Error;
 
 #[derive(Error, Debug)]

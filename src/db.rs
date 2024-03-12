@@ -661,11 +661,7 @@ impl DbReadBackend {
             )?;
             for status in stmt.query_map([], |row| {
                 Ok(ExperimentStatus {
-                    database: db
-                        .path()
-                        .map(|d| d.to_str().unwrap_or("<unknown>"))
-                        .unwrap_or("<unknown")
-                        .to_string(),
+                    database: db.path().unwrap_or("<unknown").to_string(),
                     exp_type: row.get(2).unwrap_or("".to_string()),
                     exp_label: row.get(1).unwrap_or("".to_string()),
                     exp_code: row.get(0).unwrap_or("".to_string()),
@@ -726,11 +722,7 @@ impl DbReadBackend {
         let mut list = Vec::new();
 
         for db in &self.dbs {
-            let database = db
-                .path()
-                .map(|d| d.to_str().unwrap_or("<unknown>"))
-                .unwrap_or("<unknown")
-                .to_string();
+            let database = db.path().unwrap_or("<unknown").to_string();
             let mut stmt = db.prepare(
                 "select experiments.experiment_code, experiment_label, experiment_type from experiments join linear_results on experiments.experiment_code = linear_results.experiment_code",
             )?;
@@ -793,11 +785,7 @@ impl DbReadBackend {
         let mut list = Vec::new();
 
         for db in &self.dbs {
-            let database = db
-                .path()
-                .map(|d| d.to_str().unwrap_or("<unknown>"))
-                .unwrap_or("<unknown")
-                .to_string();
+            let database = db.path().unwrap_or("<unknown").to_string();
             let mut stmt = db.prepare(
                 "select experiments.experiment_code, experiment_label, experiment_type from experiments join xy_results on experiments.experiment_code = xy_results.experiment_code",
             )?;
@@ -1138,30 +1126,21 @@ fn check_compatible_db(db: &rusqlite::Connection) -> BencherResult<()> {
     if !table_exists(db, "experiments")? {
         return Err(BencherError::SchemaMissingTable(
             "experiments".to_string(),
-            db.path()
-                .map(|p| p.to_str().unwrap_or("<unrepresentable db name>"))
-                .unwrap_or("<unknown db name>")
-                .to_owned(),
+            db.path().unwrap_or("<unknown db name>").to_owned(),
         ));
     }
 
     if !table_exists(db, "linear_results")? {
         return Err(BencherError::SchemaMissingTable(
             "linear_results".to_string(),
-            db.path()
-                .map(|p| p.to_str().unwrap_or("<unrepresentable db name>"))
-                .unwrap_or("<unknown db name>")
-                .to_owned(),
+            db.path().unwrap_or("<unknown db name>").to_owned(),
         ));
     }
 
     if !table_exists(db, "xy_results")? {
         return Err(BencherError::SchemaMissingTable(
             "xy_results".to_string(),
-            db.path()
-                .map(|p| p.to_str().unwrap_or("<unrepresentable db name>"))
-                .unwrap_or("<unknown db name>")
-                .to_owned(),
+            db.path().unwrap_or("<unknown db name>").to_owned(),
         ));
     }
 
